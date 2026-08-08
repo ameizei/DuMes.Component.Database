@@ -1,6 +1,6 @@
 using System.Reflection;
-using DuMes.Component.Database.Internal;
-using DuMes.Component.Database.Internal.Partition;
+using DuMes.Component.Database.Internal.Config;
+using DuMes.Component.Database.Internal.Postgres;
 using SqlSugar;
 using SqlSugar.IOC;
 

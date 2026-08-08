@@ -14,8 +14,9 @@ DuMes.Component.Database/
 ├── Serialization/           # System.Text.Json（IsJson / ISerializeService）
 ├── Converters/              # Ulid / Vector 表列转换（EntityService）
 └── Internal/
-    ├── Aop/                 # 映射 / 序列化 / SQL AOP / 启动建库与架构 / pgvector 扩展
-    └── Partition/           # PostgreSQL 分区表 / 继承表（INHERITS）建表
+    ├── Aop/                 # 序列化挂载 / SQL AOP / 启动建库与架构 / Warmup
+    ├── Config/              # ConfigId 注册与忽略大小写解析
+    └── Postgres/            # PG 系判定、pgvector、分区表 / 继承表 DDL
 ```
 
 ## 分工

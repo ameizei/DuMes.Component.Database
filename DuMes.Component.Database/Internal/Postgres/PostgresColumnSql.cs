@@ -4,7 +4,7 @@ using DuMes.Component.Database.CodeFirst;
 using Pgvector;
 using SqlSugar;
 
-namespace DuMes.Component.Database.Internal.Partition;
+namespace DuMes.Component.Database.Internal.Postgres;
 
 /// <summary>
 ///     分区 / 继承自定义 DDL 的列类型与 DEFAULT 字面量。

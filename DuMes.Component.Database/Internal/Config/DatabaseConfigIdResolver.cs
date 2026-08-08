@@ -1,4 +1,4 @@
-namespace DuMes.Component.Database.Internal;
+namespace DuMes.Component.Database.Internal.Config;
 
 /// <summary>
 ///     将实体上的 Tenant/Group ConfigId 解析为注册时的连接标识（忽略大小写）。

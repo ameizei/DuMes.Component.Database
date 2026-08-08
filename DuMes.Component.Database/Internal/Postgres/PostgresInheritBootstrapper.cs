@@ -4,7 +4,7 @@ using System.Text.RegularExpressions;
 using DuMes.Component.Database.CodeFirst;
 using SqlSugar;
 
-namespace DuMes.Component.Database.Internal.Partition;
+namespace DuMes.Component.Database.Internal.Postgres;
 
 /// <summary>
 ///     PostgreSQL 表继承：确保父表存在、子表 <c>INHERITS</c>，并按实体同步列。

@@ -1,5 +1,5 @@
-using DuMes.Component.Database.Internal;
 using DuMes.Component.Database.Internal.Aop;
+using DuMes.Component.Database.Internal.Config;
 using DuMes.Component.Database.Options;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;

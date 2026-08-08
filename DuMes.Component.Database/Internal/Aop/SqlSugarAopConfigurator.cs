@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Text;
 using DuMes.Component.Database.CodeFirst;
+using DuMes.Component.Database.Internal.Postgres;
 using DuMes.Component.Database.Options;
 using DuMes.Component.Database.Serialization;
 using DuMes.Component.Serilog.Constants;

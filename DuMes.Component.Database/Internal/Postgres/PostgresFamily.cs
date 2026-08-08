@@ -1,6 +1,6 @@
 using SqlSugar.IOC;
 
-namespace DuMes.Component.Database.Internal;
+namespace DuMes.Component.Database.Internal.Postgres;
 
 /// <summary>
 ///     PostgreSQL 及兼容库（人大金仓 / OpenGauss / GaussDB 等）判定，供建库、向量、分区、继承共用。

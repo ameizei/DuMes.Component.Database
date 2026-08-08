@@ -6,7 +6,7 @@ using Pgvector.Npgsql;
 using SqlSugar;
 using SqlSugar.IOC;
 
-namespace DuMes.Component.Database.Internal.Aop;
+namespace DuMes.Component.Database.Internal.Postgres;
 
 /// <summary>
 ///     注册 Npgsql 的 pgvector 类型映射，并在 PG 库上 <c>CREATE EXTENSION IF NOT EXISTS vector</c>。

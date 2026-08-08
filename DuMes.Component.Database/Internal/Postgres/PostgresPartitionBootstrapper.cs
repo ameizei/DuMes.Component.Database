@@ -5,7 +5,7 @@ using System.Text.RegularExpressions;
 using DuMes.Component.Database.CodeFirst;
 using SqlSugar;
 
-namespace DuMes.Component.Database.Internal.Partition;
+namespace DuMes.Component.Database.Internal.Postgres;
 
 /// <summary>
 ///     PostgreSQL 原生分区表：创建父表（PARTITION BY RANGE）、预建子分区，
