@@ -2,11 +2,12 @@ using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Cysharp.Serialization.Json;
+using SqlSugar;
 
 namespace DuMes.Component.Database.Serialization;
 
 /// <summary>
-///     数据库组件共用的 System.Text.Json 选项（IsJson 列、自定义 <see cref="ISerializeService"/>）。
+///     数据库组件共用的 System.Text.Json 选项（IsJson 列、自定义 <see cref="ISerializeService" />）。
 /// </summary>
 public static class DatabaseJsonOptions
 {

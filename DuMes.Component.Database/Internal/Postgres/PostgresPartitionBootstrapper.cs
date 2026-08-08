@@ -14,8 +14,8 @@ namespace DuMes.Component.Database.Internal.Postgres;
 /// <remarks>
 ///     依据 PostgreSQL 文档：对分区父表执行 ADD COLUMN / DROP COLUMN 会传播到所有分区，
 ///     且不能只改某个子分区的列结构。见
-///     <see href="https://www.postgresql.org/docs/current/ddl-partitioning.html"/> 、
-///     <see href="https://www.postgresql.org/docs/current/sql-altertable.html"/>。
+///     <see href="https://www.postgresql.org/docs/current/ddl-partitioning.html" /> 、
+///     <see href="https://www.postgresql.org/docs/current/sql-altertable.html" />。
 /// </remarks>
 internal static class PostgresPartitionBootstrapper
 {
@@ -26,7 +26,7 @@ internal static class PostgresPartitionBootstrapper
         ArgumentNullException.ThrowIfNull(db);
         ArgumentNullException.ThrowIfNull(entityType);
 
-        var partition = entityType.GetCustomAttribute<DatabasePartitionAttribute>(inherit: true);
+        var partition = entityType.GetCustomAttribute<DatabasePartitionAttribute>(true);
         if (partition == null)
             return;
 
@@ -57,7 +57,7 @@ internal static class PostgresPartitionBootstrapper
     private static EntityColumnInfo ResolvePartitionColumn(Type entityType, EntityInfo entity)
     {
         var props = entityType.GetProperties(BindingFlags.Instance | BindingFlags.Public)
-            .Where(static p => p.GetCustomAttribute<DatabasePartitionFieldAttribute>(inherit: true) != null)
+            .Where(static p => p.GetCustomAttribute<DatabasePartitionFieldAttribute>(true) != null)
             .ToList();
 
         if (props.Count == 0)
@@ -180,14 +180,10 @@ internal static class PostgresPartitionBootstrapper
             // 有数据时：NOT NULL 必须带 DEFAULT，否则 ADD COLUMN 失败
             string sql;
             if (col.IsNullable || isPartKey)
-            {
                 sql = $"ALTER TABLE {tableName} ADD COLUMN IF NOT EXISTS {col.DbColumnName} {typeSql} NULL;";
-            }
             else
-            {
                 sql =
                     $"ALTER TABLE {tableName} ADD COLUMN IF NOT EXISTS {col.DbColumnName} {typeSql} NOT NULL DEFAULT {PostgresColumnSql.ResolveDefaultLiteral(col)};";
-            }
 
             db.Ado.ExecuteCommand(sql);
         }

@@ -6,7 +6,6 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 using SqlSugar;
 using SqlSugar.IOC;
 
@@ -62,7 +61,7 @@ public static class DatabaseServiceCollectionExtensions
 
         services.AddSingleton(options);
         // 与已校验单例保持一致（含 configureOptions 回调结果），避免 IOptions<> 与单例分叉
-        services.AddSingleton<IOptions<DatabaseComponentOptions>>(
+        services.AddSingleton(
             Microsoft.Extensions.Options.Options.Create(options));
 
         var iocConfigs = BuildIocConfigs(options);
@@ -96,7 +95,6 @@ public static class DatabaseServiceCollectionExtensions
             };
 
             if (connection.Slaves is { Count: > 0 })
-            {
                 ioc.SlaveConnectionConfigs = connection.Slaves.Select(slave => new IocConfig
                 {
                     ConfigId = slave.ConfigId.Trim(),
@@ -104,7 +102,6 @@ public static class DatabaseServiceCollectionExtensions
                     DbType = DatabaseComponentOptions.ResolveSlaveDbType(connection, slave),
                     IsAutoCloseConnection = true
                 }).ToList();
-            }
 
             list.Add(ioc);
         }

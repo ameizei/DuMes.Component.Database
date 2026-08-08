@@ -37,9 +37,9 @@ internal static class CoordinateScenario
 
         var loadedB = await systemDb.Queryable<DemoLocation>().Where(x => x.Id == bId).FirstAsync();
         if (loadedB.SlotXy is null || loadedB.SlotXyz is null
-            || Math.Abs(loadedB.SlotXy.X - 3) > 1e-5
-            || Math.Abs(loadedB.SlotXy.Y - 4) > 1e-5
-            || Math.Abs(loadedB.SlotXyz.Z.GetValueOrDefault() - 2) > 1e-5)
+                                   || Math.Abs(loadedB.SlotXy.X - 3) > 1e-5
+                                   || Math.Abs(loadedB.SlotXy.Y - 4) > 1e-5
+                                   || Math.Abs(loadedB.SlotXyz.Z.GetValueOrDefault() - 2) > 1e-5)
             throw new InvalidOperationException("坐标往返失败：" + loadedB.SlotXy + " / " + loadedB.SlotXyz);
 
         var dist2 = DatabaseCoordinate.Distance(a.SlotXy, loadedB.SlotXy);
@@ -50,7 +50,7 @@ internal static class CoordinateScenario
         if (Math.Abs(dist3 - 3d) > 1e-6)
             throw new InvalidOperationException($"3D 距离应为 3，实际 {dist3}");
 
-        var nearest2d = await systemDb.Ado.GetStringAsync(
+        var nearest2D = await systemDb.Ado.GetStringAsync(
             """
             SELECT id
             FROM demo_location
@@ -58,11 +58,11 @@ internal static class CoordinateScenario
             LIMIT 1
             """,
             new SugarParameter("@q", "[0,0]"));
-        logger.LogInformation("[Coordinate] SQL 2D 近邻 Id={Id} expect={Expect}", nearest2d, aId);
-        if (!string.Equals(nearest2d, aId.ToString(), StringComparison.Ordinal))
+        logger.LogInformation("[Coordinate] SQL 2D 近邻 Id={Id} expect={Expect}", nearest2D, aId);
+        if (!string.Equals(nearest2D, aId.ToString(), StringComparison.Ordinal))
             throw new InvalidOperationException("2D SQL 近邻失败");
 
-        var nearest3d = await systemDb.Ado.GetStringAsync(
+        var nearest3D = await systemDb.Ado.GetStringAsync(
             """
             SELECT id
             FROM demo_location
@@ -70,8 +70,8 @@ internal static class CoordinateScenario
             LIMIT 1
             """,
             new SugarParameter("@q", "[0,0,0]"));
-        logger.LogInformation("[Coordinate] SQL 3D 近邻 Id={Id} expect={Expect}", nearest3d, aId);
-        if (!string.Equals(nearest3d, aId.ToString(), StringComparison.Ordinal))
+        logger.LogInformation("[Coordinate] SQL 3D 近邻 Id={Id} expect={Expect}", nearest3D, aId);
+        if (!string.Equals(nearest3D, aId.ToString(), StringComparison.Ordinal))
             throw new InvalidOperationException("3D SQL 近邻失败");
 
         await systemDb.Deleteable<DemoLocation>()

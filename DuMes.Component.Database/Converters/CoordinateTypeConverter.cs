@@ -2,11 +2,12 @@ using System.Data;
 using DuMes.Component.Database.CodeFirst;
 using Pgvector;
 using SqlSugar;
+using DbType = System.Data.DbType;
 
-namespace SqlSugar.DbConvert;
+namespace DuMes.Component.Database.Converters;
 
 /// <summary>
-///     <see cref="DatabaseCoordinate"/> ↔ PostgreSQL <c>vector(2|3)</c>。
+///     <see cref="DatabaseCoordinate" /> ↔ PostgreSQL <c>vector(2|3)</c>。
 /// </summary>
 public sealed class CoordinateTypeConverter : ISugarDataConverter
 {
@@ -23,14 +24,14 @@ public sealed class CoordinateTypeConverter : ISugarDataConverter
         var vector = new Vector(coordinate.ToFloatArray());
         return new SugarParameter(name, vector)
         {
-            DbType = System.Data.DbType.Object
+            DbType = DbType.Object
         };
     }
 
     public T QueryConverter<T>(IDataRecord dataRecord, int dataRecordIndex)
     {
         var raw = dataRecord.GetValue(dataRecordIndex);
-        if (raw == null || raw == DBNull.Value)
+        if (raw == DBNull.Value)
             return default;
 
         var coordinate = FromStorage(raw);

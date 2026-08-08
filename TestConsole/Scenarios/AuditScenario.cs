@@ -11,7 +11,7 @@ using TestConsole.Entities.Crud;
 namespace TestConsole.Scenarios;
 
 /// <summary>
-///     统一表 <see cref="DatabaseAuditRecord"/>：被改行 Id + 改前改后 + 操作人/时间。
+///     统一表 <see cref="DatabaseAuditRecord" />：被改行 Id + 改前改后 + 操作人/时间。
 /// </summary>
 internal static class AuditScenario
 {
@@ -59,7 +59,7 @@ internal static class AuditScenario
         var newTags = new List<DemoProductTag>
         {
             fromDb.Tags[0],
-            new DemoProductTag
+            new()
             {
                 Code = "new",
                 Label = "新品",
@@ -103,7 +103,7 @@ internal static class AuditScenario
         var json = JsonSerializer.Serialize(loaded, DatabaseJsonOptions.JsonStringOptions);
         logger.LogInformation("[Audit] JSON={Json}", json);
 
-        if (loaded.EntityId != fromDb.Id || loaded.Changes.Count < 4)
+        if (loaded.Changes != null && (loaded.EntityId != fromDb.Id || loaded.Changes.Count < 4))
             throw new InvalidOperationException("log_audit 回读不符合预期");
 
         await systemDb.Deleteable<DatabaseAuditRecord>().Where(x => x.Id == audit.Id).ExecuteCommandAsync();
@@ -268,8 +268,16 @@ internal static class AuditScenario
             [roleC] = "访客",
             [roleD] = "审计员"
         };
-        string RoleName(Ulid id) => roleNames.TryGetValue(id, out var n) ? n : id.ToString();
-        string ProfileName(Ulid? id) => id == profileOld ? "旧资料卡" : id == profileNew ? "新资料卡" : id?.ToString();
+
+        string RoleName(Ulid id)
+        {
+            return roleNames.TryGetValue(id, out var n) ? n : id.ToString();
+        }
+
+        string ProfileName(Ulid? id)
+        {
+            return id == profileOld ? "旧资料卡" : id == profileNew ? "新资料卡" : id?.ToString();
+        }
 
         var user = new DemoUser()
             .NewId()

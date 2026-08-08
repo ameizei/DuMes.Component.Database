@@ -1,7 +1,6 @@
 using DuMes.Component.Database.Entities;
 using Microsoft.Extensions.Logging;
 using SqlSugar;
-using SqlSugar.IOC;
 using TestConsole.Entities.Crud;
 
 namespace TestConsole.Scenarios;

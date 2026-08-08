@@ -2,7 +2,6 @@ using System.Data;
 using DuMes.Component.Database.Options;
 using Microsoft.Extensions.Logging;
 using Npgsql;
-using Pgvector.Npgsql;
 using SqlSugar;
 using SqlSugar.IOC;
 
@@ -13,7 +12,7 @@ namespace DuMes.Component.Database.Internal.Postgres;
 /// </summary>
 internal static class PostgresVectorBootstrapper
 {
-    private static readonly object Gate = new();
+    private static readonly Lock Gate = new();
     private static bool _mapperRegistered;
 
     public static void Ensure(DatabaseComponentOptions options, ILogger logger)
@@ -21,7 +20,7 @@ internal static class PostgresVectorBootstrapper
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(logger);
 
-        RegisterMapperOnce(logger, log: true);
+        RegisterMapperOnce(logger, true);
 
         var done = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var connection in options.Connections)
@@ -41,7 +40,10 @@ internal static class PostgresVectorBootstrapper
     }
 
     /// <summary>供 AOP 配置阶段尽早调用（可无 logger）。</summary>
-    public static void RegisterMapper() => RegisterMapperOnce(logger: null, log: false);
+    public static void RegisterMapper()
+    {
+        RegisterMapperOnce(null, false);
+    }
 
     private static void RegisterMapperOnce(ILogger logger, bool log)
     {

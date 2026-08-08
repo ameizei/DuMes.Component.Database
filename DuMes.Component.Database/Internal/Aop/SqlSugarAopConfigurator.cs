@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Text;
 using DuMes.Component.Database.CodeFirst;
+using DuMes.Component.Database.Converters;
 using DuMes.Component.Database.Internal.Postgres;
 using DuMes.Component.Database.Options;
 using DuMes.Component.Database.Serialization;
@@ -9,7 +10,9 @@ using DuMes.Component.Serilog.Logging;
 using Microsoft.Extensions.Logging;
 using Pgvector;
 using SqlSugar;
+using SqlSugar.DbConvert;
 using SqlSugar.IOC;
+using UlidTypeConverter = DuMes.Component.Database.Converters.UlidTypeConverter;
 
 namespace DuMes.Component.Database.Internal.Aop;
 
@@ -41,7 +44,7 @@ internal static class SqlSugarAopConfigurator
     }
 
     /// <summary>
-    ///     IsJson 等走 System.Text.Json（<see cref="DatabaseSerializeService"/>），替代 SqlSugar 默认 Newtonsoft。
+    ///     IsJson 等走 System.Text.Json（<see cref="DatabaseSerializeService" />），替代 SqlSugar 默认 Newtonsoft。
     /// </summary>
     private static void ApplySerializeService(ISqlSugarClient client)
     {
@@ -50,7 +53,7 @@ internal static class SqlSugarAopConfigurator
     }
 
     /// <summary>
-    ///     全局 EntityService：<see cref="Ulid"/> → <c>UlidTypeConverter</c>；
+    ///     全局 EntityService：<see cref="Ulid" /> → <c>UlidTypeConverter</c>；
     ///     枚举 → SqlSugar 自带 <c>EnumToStringConvert</c>（库中存枚举名字符串）；
     ///     PG 系上 <c>[DatabaseVector]</c> → <c>VectorTypeConverter</c> + <c>vector(n)</c>；
     ///     PG 系上 <c>[DatabaseCoordinate]</c> → <c>CoordinateTypeConverter</c> + <c>vector(2|3)</c>。
@@ -66,7 +69,7 @@ internal static class SqlSugarAopConfigurator
 
             if (isPostgres)
             {
-                var coordAttr = property.GetCustomAttribute<DatabaseCoordinateAttribute>(inherit: true);
+                var coordAttr = property.GetCustomAttribute<DatabaseCoordinateAttribute>(true);
                 if (coordAttr != null)
                 {
                     var coordType = Nullable.GetUnderlyingType(property.PropertyType) ?? property.PropertyType;
@@ -74,13 +77,13 @@ internal static class SqlSugarAopConfigurator
                         throw new InvalidOperationException(
                             $"属性 {property.DeclaringType?.Name}.{property.Name} 标注了 {nameof(DatabaseCoordinateAttribute)}，类型须为 {nameof(DatabaseCoordinate)}。");
 
-                    column.SqlParameterDbType = typeof(SqlSugar.DbConvert.CoordinateTypeConverter);
+                    column.SqlParameterDbType = typeof(CoordinateTypeConverter);
                     column.DataType = $"vector({coordAttr.Dimensions})";
                     column.IsArray = false;
                     return;
                 }
 
-                var vectorAttr = property.GetCustomAttribute<DatabaseVectorAttribute>(inherit: true);
+                var vectorAttr = property.GetCustomAttribute<DatabaseVectorAttribute>(true);
                 if (vectorAttr != null)
                 {
                     var vectorType = Nullable.GetUnderlyingType(property.PropertyType) ?? property.PropertyType;
@@ -88,7 +91,7 @@ internal static class SqlSugarAopConfigurator
                         throw new InvalidOperationException(
                             $"属性 {property.DeclaringType?.Name}.{property.Name} 标注了 {nameof(DatabaseVectorAttribute)}，类型须为 float[] 或 Pgvector.Vector。");
 
-                    column.SqlParameterDbType = typeof(SqlSugar.DbConvert.VectorTypeConverter);
+                    column.SqlParameterDbType = typeof(VectorTypeConverter);
                     column.DataType = $"vector({vectorAttr.Dimensions})";
                     column.IsArray = false;
                     return;
@@ -97,12 +100,10 @@ internal static class SqlSugarAopConfigurator
             else
             {
                 // 非 PG：标了向量/坐标 Attribute 应尽早失败，避免 InitTables 生成非法类型
-                if (property.GetCustomAttribute<DatabaseCoordinateAttribute>(inherit: true) != null
-                    || property.GetCustomAttribute<DatabaseVectorAttribute>(inherit: true) != null)
-                {
+                if (property.GetCustomAttribute<DatabaseCoordinateAttribute>(true) != null
+                    || property.GetCustomAttribute<DatabaseVectorAttribute>(true) != null)
                     throw new InvalidOperationException(
                         $"属性 {property.DeclaringType?.Name}.{property.Name} 标注了向量/坐标特性，仅支持 PostgreSQL 及兼容库（当前 DbType={dbType}）。");
-                }
             }
 
             // 列上已显式指定转换器时不覆盖
@@ -113,7 +114,7 @@ internal static class SqlSugarAopConfigurator
 
             if (type == typeof(Ulid))
             {
-                column.SqlParameterDbType = typeof(SqlSugar.DbConvert.UlidTypeConverter);
+                column.SqlParameterDbType = typeof(UlidTypeConverter);
                 if (string.IsNullOrEmpty(column.DataType))
                     column.DataType = "varchar";
                 if (column.Length <= 0)
@@ -123,7 +124,7 @@ internal static class SqlSugarAopConfigurator
 
             if (type.IsEnum)
             {
-                column.SqlParameterDbType = typeof(SqlSugar.DbConvert.EnumToStringConvert);
+                column.SqlParameterDbType = typeof(EnumToStringConvert);
                 if (string.IsNullOrEmpty(column.DataType))
                     column.DataType = "varchar";
                 if (column.Length <= 0)
@@ -149,13 +150,9 @@ internal static class SqlSugarAopConfigurator
         client.Aop.OnExecutingChangeSql = (sql, parameters) =>
         {
             if (parameters != null)
-            {
                 foreach (var parameter in parameters)
-                {
                     if (parameter.Value is Ulid ulid)
                         parameter.Value = ulid.ToString();
-                }
-            }
 
             return new KeyValuePair<string, SugarParameter[]>(sql, parameters);
         };

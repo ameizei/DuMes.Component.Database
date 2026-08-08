@@ -118,8 +118,8 @@ internal static class PostgresColumnSql
             var start = raw.IndexOf('(');
             var end = raw.IndexOf(')');
             if (start > 0 && end > start
-                && int.TryParse(raw.AsSpan(start + 1, end - start - 1), NumberStyles.None, CultureInfo.InvariantCulture, out var n)
-                && n > 0)
+                          && int.TryParse(raw.AsSpan(start + 1, end - start - 1), NumberStyles.None, CultureInfo.InvariantCulture, out var n)
+                          && n > 0)
                 return n;
 
             return null;
@@ -134,7 +134,8 @@ internal static class PostgresColumnSql
 
         // float[] / Vector 无 DataType 时无法推断维度，不冒充 vector DEFAULT
         if (under == typeof(float[]) || under == typeof(Vector))
-            return null;
+        {
+        }
 
         return null;
     }

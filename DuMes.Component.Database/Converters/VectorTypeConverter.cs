@@ -2,11 +2,12 @@ using System.Data;
 using System.Globalization;
 using Pgvector;
 using SqlSugar;
+using DbType = System.Data.DbType;
 
-namespace SqlSugar.DbConvert;
+namespace DuMes.Component.Database.Converters;
 
 /// <summary>
-///     <c>float[]</c> / <see cref="Vector"/> ↔ PostgreSQL <c>vector</c> 列转换。
+///     <c>float[]</c> / <see cref="Vector" /> ↔ PostgreSQL <c>vector</c> 列转换。
 ///     由组件在 <c>EntityService</c> 中对带 <c>[DatabaseVector]</c> 的属性挂载。
 /// </summary>
 public sealed class VectorTypeConverter : ISugarDataConverter
@@ -21,14 +22,14 @@ public sealed class VectorTypeConverter : ISugarDataConverter
         // 使用 Pgvector.Vector；配合启动时 GlobalTypeMapper.UseVector + ReloadTypes
         return new SugarParameter(name, vector)
         {
-            DbType = System.Data.DbType.Object
+            DbType = DbType.Object
         };
     }
 
     public T QueryConverter<T>(IDataRecord dataRecord, int dataRecordIndex)
     {
         var raw = dataRecord.GetValue(dataRecordIndex);
-        if (raw == null || raw == DBNull.Value)
+        if (raw == DBNull.Value)
             return default;
 
         if (typeof(T) == typeof(Vector))
