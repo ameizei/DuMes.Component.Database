@@ -9,6 +9,8 @@ namespace TestConsole.Entities.Coordinate;
 [SugarTable("demo_location")]
 [CodeFirst]
 [Tenant("system")]
+[DatabaseVectorIndex("ix_{table}_slot_xy", nameof(SlotXy))]
+[DatabaseVectorIndex("ix_{table}_slot_xyz", nameof(SlotXyz))]
 public class DemoLocation
 {
     [SugarColumn(IsPrimaryKey = true, ColumnName = "id", Length = 26)]

@@ -11,6 +11,8 @@ namespace TestConsole.Entities.Crud;
 [SugarTable("demo_product")]
 [CodeFirst]
 [Tenant("system")]
+// 对齐产线 material_barcode_list：jsonb 数组用 GIN jsonb_path_ops，便于 @> 包含查询
+[DatabaseJsonbIndex("ix_{table}_tags", nameof(Tags))]
 public class DemoProduct : DatabaseEntity
 {
     [SugarColumn(ColumnName = "name", Length = 100)]

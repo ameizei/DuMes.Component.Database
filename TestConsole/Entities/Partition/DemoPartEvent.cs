@@ -11,6 +11,7 @@ namespace TestConsole.Entities.Partition;
 [CodeFirst]
 [Tenant("system")]
 [DatabasePartition(DatabasePartitionGrain.Month, AheadCount = 3, PastCount = 1)]
+[SugarIndex("ix_{table}_ctime", nameof(CreateTime), OrderByType.Desc)]
 public class DemoPartEvent
 {
     [SugarColumn(IsPrimaryKey = true, ColumnName = "id", Length = 26)]

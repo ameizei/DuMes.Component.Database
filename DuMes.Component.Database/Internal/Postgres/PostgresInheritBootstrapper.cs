@@ -78,10 +78,17 @@ internal static class PostgresInheritBootstrapper
                     $"父表 {tableName} 已存在但不是普通表（relkind={kind}），无法作为继承父表。");
 
             SyncColumns(db, tableName, columns, protectedNames: null, dropOnlyOutside: null);
-            return;
+        }
+        else
+        {
+            CreateTable(db, tableName, columns, inheritsParent: null);
         }
 
-        CreateTable(db, tableName, columns, inheritsParent: null);
+        // 仅处理父实体自身索引（inherit:false）；子表索引在 EnsureChildTable
+        PostgresIndexBootstrapper.Ensure(db, parentType);
+        // 父实体可能未出现在本次 InitTables 列表中，仍需补 jsonb / 向量索引
+        PostgresJsonbIndexBootstrapper.Ensure(db, parentType);
+        PostgresVectorIndexBootstrapper.Ensure(db, parentType);
     }
 
     private static void EnsureChildTable(ISqlSugarClient db, Type childType, Type parentType)
@@ -115,10 +122,14 @@ internal static class PostgresInheritBootstrapper
             EnsureInherits(db, childTable, parentTable);
             // 子表 information_schema 会列出继承列：DROP 时不得动父列
             SyncColumns(db, childTable, localColumns, protectedNames: parentColumnNames, dropOnlyOutside: parentColumnNames);
-            return;
+        }
+        else
+        {
+            CreateTable(db, childTable, localColumns, inheritsParent: parentTable);
         }
 
-        CreateTable(db, childTable, localColumns, inheritsParent: parentTable);
+        // INHERITS 不传播索引；子实体自身 [SugarIndex] 建在子表上
+        PostgresIndexBootstrapper.Ensure(db, childType);
     }
 
     private static List<EntityColumnInfo> ResolveLocalColumns(Type childType, EntityInfo childEntity)

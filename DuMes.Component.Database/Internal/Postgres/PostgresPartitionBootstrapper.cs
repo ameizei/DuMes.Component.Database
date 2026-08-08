@@ -50,6 +50,8 @@ internal static class PostgresPartitionBootstrapper
 
         EnsureParentTable(db, tableName, columns, partColumn);
         EnsureChildPartitions(db, tableName, partColumn.DbColumnName, partition);
+        // 声明式分区：索引建在父表，PG 会落到各子分区
+        PostgresIndexBootstrapper.Ensure(db, entityType);
     }
 
     private static EntityColumnInfo ResolvePartitionColumn(Type entityType, EntityInfo entity)

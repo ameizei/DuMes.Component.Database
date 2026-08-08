@@ -9,6 +9,7 @@ namespace TestConsole.Entities.Inherit;
 [SugarTable("demo_vehicle")]
 [CodeFirst]
 [Tenant("system")]
+[SugarIndex("ix_{table}_name", nameof(Name), OrderByType.Asc)]
 public class DemoVehicle
 {
     [SugarColumn(IsPrimaryKey = true, ColumnName = "id", Length = 26)]

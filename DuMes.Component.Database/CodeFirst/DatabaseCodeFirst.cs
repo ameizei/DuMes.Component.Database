@@ -102,6 +102,16 @@ public static class DatabaseCodeFirst
 
         foreach (var type in OrderInheritChildren(inheritChildren))
             PostgresInheritBootstrapper.Ensure(db, type);
+
+        // jsonb GIN / 向量近邻索引：SqlSugar [SugarIndex] 无法表达；普通/分区/继承统一补建
+        if (PostgresFamily.IsPostgresFamily(db.CurrentConnectionConfig.DbType))
+        {
+            foreach (var type in list)
+            {
+                PostgresJsonbIndexBootstrapper.Ensure(db, type);
+                PostgresVectorIndexBootstrapper.Ensure(db, type);
+            }
+        }
     }
 
     /// <summary>

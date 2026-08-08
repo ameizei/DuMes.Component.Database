@@ -10,6 +10,7 @@ namespace TestConsole.Entities.Inherit;
 [CodeFirst]
 [Tenant("system")]
 [DatabaseInherit]
+[SugarIndex("ix_{table}_doors", nameof(Doors), OrderByType.Asc)]
 public class DemoCar : DemoVehicle
 {
     [SugarColumn(ColumnName = "doors")]

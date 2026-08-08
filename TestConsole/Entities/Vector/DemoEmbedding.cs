@@ -9,6 +9,7 @@ namespace TestConsole.Entities.Vector;
 [SugarTable("demo_embedding")]
 [CodeFirst]
 [Tenant("system")]
+[DatabaseVectorIndex("ix_{table}_embedding", nameof(Embedding))]
 public class DemoEmbedding
 {
     [SugarColumn(IsPrimaryKey = true, ColumnName = "id", Length = 26)]

@@ -18,7 +18,7 @@ DuMes.Component.Database/
 └── Internal/
     ├── Aop/                 # 序列化挂载 / SQL AOP / 启动建库与架构 / Warmup
     ├── Config/              # ConfigId 注册与忽略大小写解析
-    └── Postgres/            # PG 系判定、pgvector、分区表 / 继承表 DDL
+    └── Postgres/            # PG 系判定、pgvector、分区/继承 DDL、B-tree/jsonb/向量索引补建
 ```
 
 ## 分工
@@ -114,10 +114,12 @@ builder.Services.AddComponentDatabase(o =>
 | 自动建库 / 架构 | 固定开启：`CreateDatabase()`；建架构按 `DbType` 选 SQL——PG 系（含人大金仓/OpenGauss 等）`CREATE SCHEMA IF NOT EXISTS`（读 `searchpath`）；SQL Server 查 `sys.schemas` 后建（架构名取 `ConfigId`）；MySQL / Sqlite / Oracle 等**不支持独立架构**则跳过。见 [库表管理](https://www.donet5.com/Home/Doc?typeId=1203) |
 | 统一审计表 | Warmup 仅在 `AuditConfigIds`（默认第一连接）上建 `log_audit`；写入请 `GetConnection(auditConfigId)` |
 | CodeFirst | 扫描建表须同时具备：`[CodeFirst]`（非 DbFirst）+ `[SugarTable]` + `[Tenant("configId")]`（优先；兼容 `[DatabaseGroup]`）。无 `[CodeFirst]` 的表实体不参与 InitTables。`QueryableWithAttr` 仍只依赖 Tenant。见 [CodeFirst](https://www.donet5.com/Home/Doc?typeId=1206)、[多租户](https://www.donet5.com/Doc/1/2246) |
-| PG 分区表 | `[DatabasePartition]` + `[DatabasePartitionField]`；InitTables 建父表/`PARTITION BY RANGE`/子分区。**已存在时对比实体增删列**（有数据亦可：对父表 `ADD`/`DROP COLUMN` 级联子分区；分区键不可删；新增非空列带 DEFAULT）。非 SqlSugar SplitTable |
-| PG 继承表 | 子实体 C# 继承父实体并标 `[DatabaseInherit]`；InitTables 建父表后 `CREATE TABLE child (...) INHERITS (parent)`。子类只声明本地列；父列变更由父实体同步并传播到子表。与分区表互斥。见 [表继承](https://www.postgresql.org/docs/current/ddl-inherit.html) |
+| PG 分区表 | `[DatabasePartition]` + `[DatabasePartitionField]`；InitTables 建父表/`PARTITION BY RANGE`/子分区。**已存在时对比实体增删列**（有数据亦可：对父表 `ADD`/`DROP COLUMN` 级联子分区；分区键不可删；新增非空列带 DEFAULT）。`[SugarIndex]` 建在**父表**（声明式分区落到子分区）。非 SqlSugar SplitTable |
+| PG 继承表 | 子实体 C# 继承父实体并标 `[DatabaseInherit]`；InitTables 建父表后 `CREATE TABLE child (...) INHERITS (parent)`。子类只声明本地列；父列变更由父实体同步并传播到子表。`[SugarIndex]` **不随 INHERITS 传播**，父/子实体各自建在对应表上。与分区表互斥。见 [表继承](https://www.postgresql.org/docs/current/ddl-inherit.html) |
+| PG jsonb GIN | `[DatabaseJsonbIndex("ix_{table}_x", nameof(Prop))]` → `USING GIN (col jsonb_path_ops)`（默认）；`Ops` 可选 `jsonb_ops`。普通/分区/继承表 InitTables 时补建。`[SugarIndex]` 仅 B-tree，不能代替。见 [JSON Indexing](https://www.postgresql.org/docs/current/datatype-json.html#JSON-INDEXING) |
 | PG 向量列 | `[DatabaseVector(n)]` 标在 `float[]` / `Pgvector.Vector` 上 → 列类型 `vector(n)`；启动时 `CREATE EXTENSION IF NOT EXISTS vector` + Npgsql `UseVector`（库须已支持 pgvector）。见 [pgvector](https://github.com/pgvector/pgvector) |
 | PG 坐标列 | `[DatabaseCoordinate(2|3)]` + 属性类型 `DatabaseCoordinate` → `vector(2)` / `vector(3)`（与 embedding 共用 pgvector，语义为货位/位姿）。内存距离 `DatabaseCoordinate.Distance`；SQL 近邻 `ORDER BY col <-> @q::vector` |
+| PG 向量索引 | `[DatabaseVectorIndex("ix_{table}_x", nameof(Prop))]` → 默认 `USING hnsw (col vector_l2_ops)`；可选 IVFFlat、`Cosine`/`InnerProduct`，以及 `M`/`EfConstruction`/`Lists`。embedding 与坐标列通用。见 [Indexing](https://github.com/pgvector/pgvector#indexing) |
 | `IsAutoCloseConnection` | 固定 `true`。若业务必须手动管连接，请在业务逻辑中单独 `new SqlSugarClient(...)` |
 | `PgSqlIsAutoToLower` | PostgreSQL 时固定 `true`（含 CodeFirst）；实体列须显式 `ColumnName`（见「命名约定」） |
 | 全量 SQL | `OnLogExecuting` → `ILogger.LogDebug`（赋值后 SQL）。**仅 Development** 会进**调试窗口**（Serilog：Development 最低 Debug；其它环境最低 Information，故 Production **不会**打全量 SQL） |
@@ -207,11 +209,12 @@ public class Product { /* ... */ }
 [Tenant("demo")]
 public class AuditLog { /* ... */ }
 
-// PostgreSQL 按月分区表
+// PostgreSQL 按月分区表（[SugarIndex] 建在父表）
 [SugarTable("order_log")]
 [CodeFirst]
 [Tenant("main")]
 [DatabasePartition(DatabasePartitionGrain.Month, AheadCount = 3, PastCount = 1)]
+[SugarIndex("ix_{table}_ctime", nameof(CreateTime), OrderByType.Desc)]
 public class OrderLog
 {
     [SugarColumn(IsPrimaryKey = true, ColumnName = "id", Length = 26)]
@@ -222,10 +225,11 @@ public class OrderLog
     public DateTime CreateTime { get; set; }
 }
 
-// PostgreSQL 继承表（C# 继承镜像 INHERITS；与分区表互斥）
+// PostgreSQL 继承表（C# 继承镜像 INHERITS；与分区表互斥；索引各自声明）
 [SugarTable("vehicle")]
 [CodeFirst]
 [Tenant("main")]
+[SugarIndex("ix_{table}_name", nameof(Name), OrderByType.Asc)]
 public class Vehicle
 {
     [SugarColumn(IsPrimaryKey = true, ColumnName = "id", Length = 26)]
@@ -239,6 +243,7 @@ public class Vehicle
 [CodeFirst]
 [Tenant("main")]
 [DatabaseInherit]
+[SugarIndex("ix_{table}_doors", nameof(Doors), OrderByType.Asc)]
 public class Car : Vehicle
 {
     [SugarColumn(ColumnName = "doors")]
@@ -256,10 +261,28 @@ public class ElectricCar : Car
     public decimal BatteryKwh { get; set; }
 }
 
-// PostgreSQL pgvector（embedding）
+// jsonb GIN（默认 jsonb_path_ops，适合 @>；产线 material_barcode_list 同类）
+[SugarTable("product_info")]
+[CodeFirst]
+[Tenant("main")]
+[DatabaseJsonbIndex("ix_{table}_mblist", nameof(MaterialBarcodeList))]
+// → CREATE INDEX … USING GIN (material_barcode_list jsonb_path_ops)
+public class ProductInfo
+{
+    [SugarColumn(IsPrimaryKey = true, ColumnName = "id", Length = 26)]
+    public Ulid Id { get; set; }
+
+    [SugarColumn(ColumnName = "material_barcode_list", IsJson = true, ColumnDataType = "jsonb", IsNullable = true)]
+    public List<object> MaterialBarcodeList { get; set; } // 业务可换成强类型 DTO
+}
+
+// PostgreSQL pgvector（embedding）+ HNSW 近邻索引
 [SugarTable("doc_embedding")]
 [CodeFirst]
 [Tenant("main")]
+[DatabaseVectorIndex("ix_{table}_embedding", nameof(Embedding))]
+// → CREATE INDEX … USING hnsw (embedding vector_l2_ops)
+// 余弦：DatabaseVectorIndexOps.Cosine ↔ ORDER BY embedding <=> @q
 public class DocEmbedding
 {
     [SugarColumn(IsPrimaryKey = true, ColumnName = "id", Length = 26)]
@@ -270,10 +293,11 @@ public class DocEmbedding
     public float[] Embedding { get; set; }
 }
 
-// 仓库坐标（2D / 3D，落库 vector(2|3)；可算欧氏距离）
+// 仓库坐标（2D / 3D）+ HNSW（与 embedding 同一套 [DatabaseVectorIndex]）
 [SugarTable("wh_location")]
 [CodeFirst]
 [Tenant("main")]
+[DatabaseVectorIndex("ix_{table}_slot_xy", nameof(SlotXy))]
 public class WhLocation
 {
     [SugarColumn(IsPrimaryKey = true, ColumnName = "id", Length = 26)]
@@ -529,12 +553,14 @@ catch
 8. **SQL 日志**：无 `EnableSqlDebugLog`；Development → `LogDebug` 进调试窗口；各环境慢 SQL / 错误用 `Write*` 落盘；Production 无全量 SQL。
 9. **自动建库 / 架构**：固定开启；建架构随 `DbType` 分支（不支持则跳过）。账户须有建库 / 建 schema 权限。
 10. **CodeFirst / Tenant**：扫描建表须 `[CodeFirst]` + `[SugarTable]` + `[Tenant]`（或 `[DatabaseGroup]`）；DbFirst 表不要标 `[CodeFirst]`。业务用 `QueryableWithAttr<T>()` 等切库。
-11. **PG 分区表**：`[DatabasePartition]` + `[DatabasePartitionField]`；主键含分区列。有数据时仍可对**父表**增删列（[官方分区说明](https://www.postgresql.org/docs/current/ddl-partitioning.html) / [ALTER TABLE](https://www.postgresql.org/docs/current/sql-altertable.html)），子分区自动对齐；勿在子分区上单独改列。分区键禁止删除。
-12. **PG 继承表**：子实体须 C# 继承父实体并标 `[DatabaseInherit]`（勿与分区表混用）。子类只写本地列；查父表默认含子集（`ONLY parent` 可排除）。见 [表继承](https://www.postgresql.org/docs/current/ddl-inherit.html)。
-13. **PG 向量（pgvector）**：列标 `[DatabaseVector(n)]`；数据库须已支持 pgvector。近邻查询可用 SQL 运算符 `<->` / `<=>` / `<#>`。
-14. **PG 坐标**：`[DatabaseCoordinate(2|3)]` + `DatabaseCoordinate`；落库 `vector(2|3)`。WMS 货位距离用 `DatabaseCoordinate.Distance` 或 SQL `<->`。
-15. **SqlSugar 能力**：分表、仓储等以 [官方文档](https://www.donet5.com/Home/Doc) 为准；本组件负责注册、校验、AOP、建库/架构与 CodeFirst / 分区 / 继承 / 向量 / 坐标封装。
-16. **字段审计**：`AuditConfigIds` 指定建表/写入连接；`WithAudit(b).SetName(前,后)`；`HasChanges` 空则不写库。
+11. **PG 分区表**：`[DatabasePartition]` + `[DatabasePartitionField]`；主键含分区列。有数据时仍可对**父表**增删列（[官方分区说明](https://www.postgresql.org/docs/current/ddl-partitioning.html) / [ALTER TABLE](https://www.postgresql.org/docs/current/sql-altertable.html)），子分区自动对齐；勿在子分区上单独改列。分区键禁止删除。`[SugarIndex]` 建在父表；**UNIQUE 索引须包含分区键**（PG 约束）。
+12. **PG 继承表**：子实体须 C# 继承父实体并标 `[DatabaseInherit]`（勿与分区表混用）。子类只写本地列；查父表默认含子集（`ONLY parent` 可排除）。`[SugarIndex]` 不继承，父/子各自声明。见 [表继承](https://www.postgresql.org/docs/current/ddl-inherit.html)。
+13. **PG jsonb GIN**：`[DatabaseJsonbIndex]` 默认 `jsonb_path_ops`（`@>` 包含）；需 `?` 等键操作时用 `DatabaseJsonbIndexOps.Ops`。查询须用 jsonb 运算符才走索引。
+14. **PG 向量（pgvector）**：列标 `[DatabaseVector(n)]`；数据库须已支持 pgvector。近邻查询可用 SQL 运算符 `<->` / `<=>` / `<#>`。
+15. **PG 坐标**：`[DatabaseCoordinate(2|3)]` + `DatabaseCoordinate`；落库 `vector(2|3)`。WMS 货位距离用 `DatabaseCoordinate.Distance` 或 SQL `<->`。
+16. **PG 向量索引**：`[DatabaseVectorIndex]` 默认 HNSW + L2；查询运算符须与 `Ops` 一致（L2=`<->`，Cosine=`<=>`，IP=`<#>`）。IVFFlat 适合已有数据后再建，并设合理 `Lists`。
+17. **SqlSugar 能力**：分表、仓储等以 [官方文档](https://www.donet5.com/Home/Doc) 为准；本组件负责注册、校验、AOP、建库/架构与 CodeFirst / 分区 / 继承 / jsonb·向量索引 / 向量 / 坐标封装。
+18. **字段审计**：`AuditConfigIds` 指定建表/写入连接；`WithAudit(b).SetName(前,后)`；`HasChanges` 空则不写库。
 
 ## 引用
 
