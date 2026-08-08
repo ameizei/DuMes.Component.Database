@@ -31,6 +31,7 @@ internal sealed class DatabaseComponentWarmupHostedService : IHostedService
     public Task StartAsync(CancellationToken cancellationToken)
     {
         DatabaseBootstrapper.EnsureCreated(_options, _logger);
+        PostgresVectorBootstrapper.Ensure(_options, _logger);
         return Task.CompletedTask;
     }
 

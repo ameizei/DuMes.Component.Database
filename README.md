@@ -10,11 +10,11 @@
 DuMes.Component.Database/
 ├── DependencyInjection/     # AddComponentDatabase
 ├── Options/                 # DatabaseComponentOptions、DatabaseConnectionOptions
-├── CodeFirst/               # [CodeFirst]/Tenant/Group/Partition/Inherit、GetEntityTypes、InitTables
+├── CodeFirst/               # [CodeFirst]/Tenant/Group/Partition/Inherit/Vector、GetEntityTypes、InitTables
 ├── Serialization/           # System.Text.Json（IsJson / ISerializeService）
-├── Converters/              # UlidTypeConverter（表列 EntityService）
+├── Converters/              # Ulid / Vector 表列转换（EntityService）
 └── Internal/
-    ├── Aop/                 # 映射 / 序列化 / SQL AOP / 启动建库与架构
+    ├── Aop/                 # 映射 / 序列化 / SQL AOP / 启动建库与架构 / pgvector 扩展
     └── Partition/           # PostgreSQL 分区表 / 继承表（INHERITS）建表
 ```
 
@@ -111,6 +111,7 @@ builder.Services.AddComponentDatabase(o =>
 | CodeFirst | 扫描建表须同时具备：`[CodeFirst]`（非 DbFirst）+ `[SugarTable]` + `[Tenant("configId")]`（优先；兼容 `[DatabaseGroup]`）。无 `[CodeFirst]` 的表实体不参与 InitTables。`QueryableWithAttr` 仍只依赖 Tenant。见 [CodeFirst](https://www.donet5.com/Home/Doc?typeId=1206)、[多租户](https://www.donet5.com/Doc/1/2246) |
 | PG 分区表 | `[DatabasePartition]` + `[DatabasePartitionField]`；InitTables 建父表/`PARTITION BY RANGE`/子分区。**已存在时对比实体增删列**（有数据亦可：对父表 `ADD`/`DROP COLUMN` 级联子分区；分区键不可删；新增非空列带 DEFAULT）。非 SqlSugar SplitTable |
 | PG 继承表 | 子实体 C# 继承父实体并标 `[DatabaseInherit]`；InitTables 建父表后 `CREATE TABLE child (...) INHERITS (parent)`。子类只声明本地列；父列变更由父实体同步并传播到子表。与分区表互斥。见 [表继承](https://www.postgresql.org/docs/current/ddl-inherit.html) |
+| PG 向量列 | `[DatabaseVector(n)]` 标在 `float[]` / `Pgvector.Vector` 上 → 列类型 `vector(n)`；启动时 `CREATE EXTENSION IF NOT EXISTS vector` + Npgsql `UseVector`（库须已支持 pgvector）。见 [pgvector](https://github.com/pgvector/pgvector) |
 | `IsAutoCloseConnection` | 固定 `true`。若业务必须手动管连接，请在业务逻辑中单独 `new SqlSugarClient(...)` |
 | `PgSqlIsAutoToLower` | PostgreSQL 时固定 `true`（含 CodeFirst）；实体列须显式 `ColumnName`（见「命名约定」） |
 | 全量 SQL | `OnLogExecuting` → `ILogger.LogDebug`（赋值后 SQL）。**仅 Development** 会进**调试窗口**（Serilog：Development 最低 Debug；其它环境最低 Information，故 Production **不会**打全量 SQL） |
@@ -246,6 +247,20 @@ public class ElectricCar : Car
 {
     [SugarColumn(ColumnName = "battery_kwh", Length = 10, DecimalDigits = 2)]
     public decimal BatteryKwh { get; set; }
+}
+
+// PostgreSQL pgvector
+[SugarTable("doc_embedding")]
+[CodeFirst]
+[Tenant("main")]
+public class DocEmbedding
+{
+    [SugarColumn(IsPrimaryKey = true, ColumnName = "id", Length = 26)]
+    public Ulid Id { get; set; }
+
+    [SugarColumn(ColumnName = "embedding")]
+    [DatabaseVector(1536)] // → vector(1536)
+    public float[] Embedding { get; set; }
 }
 
 // 建表（按 Tenant → ConfigId）
@@ -387,7 +402,8 @@ catch
 10. **CodeFirst / Tenant**：扫描建表须 `[CodeFirst]` + `[SugarTable]` + `[Tenant]`（或 `[DatabaseGroup]`）；DbFirst 表不要标 `[CodeFirst]`。业务用 `QueryableWithAttr<T>()` 等切库。
 11. **PG 分区表**：`[DatabasePartition]` + `[DatabasePartitionField]`；主键含分区列。有数据时仍可对**父表**增删列（[官方分区说明](https://www.postgresql.org/docs/current/ddl-partitioning.html) / [ALTER TABLE](https://www.postgresql.org/docs/current/sql-altertable.html)），子分区自动对齐；勿在子分区上单独改列。分区键禁止删除。
 12. **PG 继承表**：子实体须 C# 继承父实体并标 `[DatabaseInherit]`（勿与分区表混用）。子类只写本地列；查父表默认含子集（`ONLY parent` 可排除）。见 [表继承](https://www.postgresql.org/docs/current/ddl-inherit.html)。
-13. **SqlSugar 能力**：分表、仓储等以 [官方文档](https://www.donet5.com/Home/Doc) 为准；本组件负责注册、校验、AOP、建库/架构与 CodeFirst / 分区 / 继承封装。
+13. **PG 向量（pgvector）**：列标 `[DatabaseVector(n)]`；数据库须已支持 pgvector。近邻查询可用 SQL 运算符 `<->` / `<=>` / `<#>`。
+14. **SqlSugar 能力**：分表、仓储等以 [官方文档](https://www.donet5.com/Home/Doc) 为准；本组件负责注册、校验、AOP、建库/架构与 CodeFirst / 分区 / 继承 / 向量封装。
 
 ## 引用
 
@@ -406,7 +422,7 @@ using SqlSugar.IOC; // DbScoped
 
 | 工程 | 说明 |
 |------|------|
-| `TestConsole` | 场景：`Crud` / `MultiDb` / `Navigate` / `Partition` / `Inherit`（PG 分区表与继承表） |
+| `TestConsole` | 场景：`Crud` / `MultiDb` / `Navigate` / `Partition` / `Inherit` / `Vector`（pgvector） |
 | `TestWebApi` | （待补）WebAPI：演示 CRUD 与多库 |
 | `TestWorkerService` | （待补）Worker：后台任务写库 |
 

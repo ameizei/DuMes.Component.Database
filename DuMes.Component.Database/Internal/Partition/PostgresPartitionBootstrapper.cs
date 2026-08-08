@@ -336,6 +336,9 @@ internal static class PostgresPartitionBootstrapper
         if (!string.IsNullOrWhiteSpace(col.DataType))
         {
             var dt = col.DataType.Trim().ToLowerInvariant();
+            if (dt.StartsWith("vector", StringComparison.Ordinal))
+                return col.DataType.Trim();
+
             return dt switch
             {
                 "varchar" or "character varying" => col.Length > 0 ? $"varchar({col.Length})" : "text",

@@ -1,9 +1,12 @@
+using System.Reflection;
 using System.Text;
+using DuMes.Component.Database.CodeFirst;
 using DuMes.Component.Database.Options;
 using DuMes.Component.Database.Serialization;
 using DuMes.Component.Serilog.Constants;
 using DuMes.Component.Serilog.Logging;
 using Microsoft.Extensions.Logging;
+using Pgvector;
 using SqlSugar;
 using SqlSugar.IOC;
 
@@ -20,6 +23,9 @@ internal static class SqlSugarAopConfigurator
     {
         ArgumentNullException.ThrowIfNull(db);
         ArgumentNullException.ThrowIfNull(options);
+
+        // 尽早注册，避免首连读写 vector 时 Npgsql 不识别类型
+        PostgresVectorBootstrapper.RegisterMapper();
 
         foreach (var connection in options.Connections)
         {
@@ -43,7 +49,8 @@ internal static class SqlSugarAopConfigurator
 
     /// <summary>
     ///     全局 EntityService：<see cref="Ulid"/> → <c>UlidTypeConverter</c>；
-    ///     枚举 → SqlSugar 自带 <c>EnumToStringConvert</c>（库中存枚举名字符串）。
+    ///     枚举 → SqlSugar 自带 <c>EnumToStringConvert</c>（库中存枚举名字符串）；
+    ///     <c>[DatabaseVector]</c> → <c>VectorTypeConverter</c> + <c>vector(n)</c>。
     /// </summary>
     private static void ApplyTypeMappings(ISqlSugarClient client)
     {
@@ -52,6 +59,20 @@ internal static class SqlSugarAopConfigurator
         external.EntityService = (property, column) =>
         {
             previous?.Invoke(property, column);
+
+            var vectorAttr = property.GetCustomAttribute<DatabaseVectorAttribute>(inherit: true);
+            if (vectorAttr != null)
+            {
+                var vectorType = Nullable.GetUnderlyingType(property.PropertyType) ?? property.PropertyType;
+                if (vectorType != typeof(float[]) && vectorType != typeof(Vector))
+                    throw new InvalidOperationException(
+                        $"属性 {property.DeclaringType?.Name}.{property.Name} 标注了 {nameof(DatabaseVectorAttribute)}，类型须为 float[] 或 Pgvector.Vector。");
+
+                column.SqlParameterDbType = typeof(SqlSugar.DbConvert.VectorTypeConverter);
+                column.DataType = $"vector({vectorAttr.Dimensions})";
+                column.IsArray = false;
+                return;
+            }
 
             // 列上已显式指定转换器时不覆盖
             if (column.SqlParameterDbType != null)
