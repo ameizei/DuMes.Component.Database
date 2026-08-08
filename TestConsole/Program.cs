@@ -6,7 +6,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Serilog;
 using SqlSugar.IOC;
-using TestConsole.Entities;
+using TestConsole.Entities.Crud;
 using TestConsole.Scenarios;
 
 Environment.SetEnvironmentVariable("DOTNET_ENVIRONMENT", "Development");
@@ -26,10 +26,10 @@ await host.StartAsync(); // Warmup：建库 / 架构
 
 var logger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("TestConsole");
 
-// CodeFirst：按实体 [DatabaseGroup]→ConfigId 扫描建表（可在任意业务入口调用）
+// CodeFirst：扫描 [CodeFirst]+[Tenant]+[SugarTable] 实体并建表（可在任意业务入口调用）
 var codeFirstMap = DatabaseCodeFirst.InitTables(typeof(DemoProduct).Assembly);
 foreach (var (group, types) in codeFirstMap)
-    logger.LogInformation("CodeFirst GroupName/ConfigId={Group} Types={Count}：{Names}",
+    logger.LogInformation("CodeFirst Tenant/ConfigId={Group} Types={Count}：{Names}",
         group, types.Length, string.Join(", ", types.Select(t => t.Name)));
 
 var systemDb = DbScoped.SugarScope.GetConnection("system");
@@ -38,6 +38,7 @@ var demoDb = DbScoped.SugarScope.GetConnection("demo");
 await CrudScenario.RunAsync(systemDb, logger);
 await MultiDbScenario.RunAsync(systemDb, demoDb, logger);
 await NavigateScenario.RunAsync(systemDb, logger);
+await PartitionScenario.RunAsync(systemDb, logger);
 
 logger.LogInformation("TestConsole 全部场景完成。");
 await host.StopAsync();

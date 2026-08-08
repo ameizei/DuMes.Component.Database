@@ -1,13 +1,14 @@
 using DuMes.Component.Database.CodeFirst;
 using SqlSugar;
 
-namespace TestConsole.Entities;
+namespace TestConsole.Entities.Nav;
 
 /// <summary>
 ///     导航演示：订单主表（一对一客户 + 一对多明细）。
 /// </summary>
 [SugarTable("demo_nav_order")]
-[DatabaseGroup("system")]
+[CodeFirst]
+[Tenant("system")]
 public class DemoNavOrder
 {
     [SugarColumn(IsPrimaryKey = true, ColumnName = "id", Length = 26)]

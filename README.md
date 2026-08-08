@@ -10,11 +10,12 @@
 DuMes.Component.Database/
 ├── DependencyInjection/     # AddComponentDatabase
 ├── Options/                 # DatabaseComponentOptions、DatabaseConnectionOptions
-├── CodeFirst/               # GetEntityTypes(Assembly) → Type[]、InitTables
+├── CodeFirst/               # [CodeFirst]/Tenant/Group/Partition、GetEntityTypes、InitTables
 ├── Serialization/           # System.Text.Json（IsJson / ISerializeService）
 ├── Converters/              # UlidTypeConverter（表列 EntityService）
 └── Internal/
-    └── Aop/                 # 映射 / 序列化 / SQL AOP / 启动建库与架构 / CodeFirst
+    ├── Aop/                 # 映射 / 序列化 / SQL AOP / 启动建库与架构
+    └── Partition/           # PostgreSQL PARTITION BY RANGE 建父表与子分区
 ```
 
 ## 分工
@@ -75,7 +76,7 @@ builder.Services.AddComponentDatabase(o =>
 | SqlSugar.IOC 多库注册 | 每条 `Connections` → 一个 `IocConfig`（`DbType` 可配，默认 PostgreSQL） |
 | `DbScoped.SugarScope` / `ISqlSugarClient` | 业务侧查询、事务入口 |
 | 启动建库 / 架构 | `IHostedService`：`CreateDatabase` + PG `searchpath` schema（固定开启） |
-| CodeFirst | 实体标 `[DatabaseGroup("configId")]`；业务侧调用 `DatabaseCodeFirst.InitTables(assembly)` 按组建表 |
+| CodeFirst | 实体须标 `[CodeFirst]`（表明非 DbFirst）+ `[Tenant]`/`[DatabaseGroup]` + `[SugarTable]`；`InitTables(assembly)` 按 ConfigId 建表 |
 | 自动关连接 | 注册时固定 `IsAutoCloseConnection=true`；特殊场景可在业务侧自建 `SqlSugarClient` |
 | AOP | 经 `ILogger` + Serilog：`LogDebug` / `WriteWarning` / `WriteError`（见「组件内置行为」） |
 
@@ -107,7 +108,8 @@ builder.Services.AddComponentDatabase(o =>
 |------|------|
 | 配置校验 | 启动时 `Validate()`：节存在、连接非空、`ConfigId` 唯一、`DbType` 合法 |
 | 自动建库 / 架构 | 固定开启：`CreateDatabase()`；建架构按 `DbType` 选 SQL——PG 系（含人大金仓/OpenGauss 等）`CREATE SCHEMA IF NOT EXISTS`（读 `searchpath`）；SQL Server 查 `sys.schemas` 后建（架构名取 `ConfigId`）；MySQL / Sqlite / Oracle 等**不支持独立架构**则跳过。见 [库表管理](https://www.donet5.com/Home/Doc?typeId=1203) |
-| CodeFirst | 实体同时标 `[SugarTable]` + `[DatabaseGroup(GroupName)]`，`GroupName` = `ConfigId`。业务任意时机调用 `DatabaseCodeFirst.InitTables(assembly)`（不挂 DI 注册、不随 Warmup 自动执行）。见 [CodeFirst](https://www.donet5.com/Home/Doc?typeId=1206) |
+| CodeFirst | 扫描建表须同时具备：`[CodeFirst]`（非 DbFirst）+ `[SugarTable]` + `[Tenant("configId")]`（优先；兼容 `[DatabaseGroup]`）。无 `[CodeFirst]` 的表实体不参与 InitTables。`QueryableWithAttr` 仍只依赖 Tenant。见 [CodeFirst](https://www.donet5.com/Home/Doc?typeId=1206)、[多租户](https://www.donet5.com/Doc/1/2246) |
+| PG 分区表 | `[DatabasePartition]` + `[DatabasePartitionField]`；InitTables 建父表/`PARTITION BY RANGE`/子分区。**已存在时对比实体增删列**（有数据亦可：对父表 `ADD`/`DROP COLUMN` 级联子分区；分区键不可删；新增非空列带 DEFAULT）。非 SqlSugar SplitTable |
 | `IsAutoCloseConnection` | 固定 `true`。若业务必须手动管连接，请在业务逻辑中单独 `new SqlSugarClient(...)` |
 | `PgSqlIsAutoToLower` | PostgreSQL 时固定 `true`（含 CodeFirst）；实体列须显式 `ColumnName`（见「命名约定」） |
 | 全量 SQL | `OnLogExecuting` → `ILogger.LogDebug`（赋值后 SQL）。**仅 Development** 会进**调试窗口**（Serilog：Development 最低 Debug；其它环境最低 Information，故 Production **不会**打全量 SQL） |
@@ -187,19 +189,39 @@ using DuMes.Component.Database.CodeFirst;
 using SqlSugar;
 
 [SugarTable("product")]
-[DatabaseGroup("main")] // GroupName = ConfigId
+[CodeFirst] // 声明为 CodeFirst 表；无此标记不参与扫描建表（DbFirst 表勿标）
+[Tenant("main")] // = ConfigId；InitTables + QueryableWithAttr
 public class Product { /* ... */ }
 
 [SugarTable("audit_log")]
-[DatabaseGroup("demo")]
+[CodeFirst]
+[Tenant("demo")]
 public class AuditLog { /* ... */ }
 
-// 宿主启动后、任意入口调用（按 GroupName 路由到对应库）
+// PostgreSQL 按月分区表
+[SugarTable("order_log")]
+[CodeFirst]
+[Tenant("main")]
+[DatabasePartition(DatabasePartitionGrain.Month, AheadCount = 3, PastCount = 1)]
+public class OrderLog
+{
+    [SugarColumn(IsPrimaryKey = true, ColumnName = "id", Length = 26)]
+    public Ulid Id { get; set; }
+
+    [SugarColumn(ColumnName = "create_time")]
+    [DatabasePartitionField]
+    public DateTime CreateTime { get; set; }
+}
+
+// 建表（按 Tenant → ConfigId）
 var map = DatabaseCodeFirst.InitTables(typeof(Product).Assembly);
-// 或只建某一组：
-DatabaseCodeFirst.InitTables("main", typeof(Product).Assembly);
-// 仅扫描：
-Type[] types = DatabaseCodeFirst.GetEntityTypes(typeof(Product).Assembly, "main");
+
+// 按特性切库 CRUD（SqlSugar 多租户）
+var list = await DbScoped.SugarScope.QueryableWithAttr<Product>().ToListAsync();
+await DbScoped.SugarScope.InsertableWithAttr(row).ExecuteCommandAsync();
+await DbScoped.SugarScope.UpdateableWithAttr(row).ExecuteCommandAsync();
+await DbScoped.SugarScope.DeleteableWithAttr<Product>().Where(...).ExecuteCommandAsync();
+var db = DbScoped.SugarScope.GetConnectionWithAttr<Product>();
 ```
 
 ## 命名约定（强制）
@@ -219,7 +241,8 @@ using DuMes.Component.Database.CodeFirst;
 using SqlSugar;
 
 [SugarTable("product")]
-[DatabaseGroup("main")]
+[CodeFirst]
+[Tenant("main")]
 public class Product
 {
     [SugarColumn(IsPrimaryKey = true, ColumnName = "id", Length = 26)]
@@ -326,8 +349,9 @@ catch
 7. **命名（PostgreSQL）**：库内表/列必须小写；组合词必须 `snake_case`（`xxx_xxx`）。写 `[SugarColumn]` 时 **`ColumnName` 必填**。
 8. **SQL 日志**：无 `EnableSqlDebugLog`；Development → `LogDebug` 进调试窗口；各环境慢 SQL / 错误用 `Write*` 落盘；Production 无全量 SQL。
 9. **自动建库 / 架构**：固定开启；建架构随 `DbType` 分支（不支持则跳过）。账户须有建库 / 建 schema 权限。
-10. **CodeFirst**：实体标 `[DatabaseGroup("configId")]`，业务调用 `DatabaseCodeFirst.InitTables(assembly)`；勿在 `AddComponentDatabase` 里写死扫描。
-11. **SqlSugar 能力**：分表、仓储等以 [官方文档](https://www.donet5.com/Home/Doc) 为准；本组件负责注册、校验、AOP、建库/架构与 CodeFirst 封装。
+10. **CodeFirst / Tenant**：扫描建表须 `[CodeFirst]` + `[SugarTable]` + `[Tenant]`（或 `[DatabaseGroup]`）；DbFirst 表不要标 `[CodeFirst]`。业务用 `QueryableWithAttr<T>()` 等切库。
+11. **PG 分区表**：`[DatabasePartition]` + `[DatabasePartitionField]`；主键含分区列。有数据时仍可对**父表**增删列（[官方分区说明](https://www.postgresql.org/docs/current/ddl-partitioning.html) / [ALTER TABLE](https://www.postgresql.org/docs/current/sql-altertable.html)），子分区自动对齐；勿在子分区上单独改列。分区键禁止删除。
+12. **SqlSugar 能力**：分表、仓储等以 [官方文档](https://www.donet5.com/Home/Doc) 为准；本组件负责注册、校验、AOP、建库/架构与 CodeFirst / 分区封装。
 
 ## 引用
 
@@ -346,7 +370,7 @@ using SqlSugar.IOC; // DbScoped
 
 | 工程 | 说明 |
 |------|------|
-| `TestConsole` | 控制台场景分类：`Crud`（增删改查/IsJson）、`MultiDb`（`GetConnection`）、`Navigate`（`InsertNav`/`Includes`/`UpdateNav`/`DeleteNav`） |
+| `TestConsole` | 场景：`Crud` / `MultiDb` / `Navigate` / `Partition`（PG 按月分区表） |
 | `TestWebApi` | （待补）WebAPI：演示 CRUD 与多库 |
 | `TestWorkerService` | （待补）Worker：后台任务写库 |
 

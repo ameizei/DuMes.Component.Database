@@ -1,7 +1,9 @@
 namespace DuMes.Component.Database.CodeFirst;
 
 /// <summary>
-///     标记实体所属库组；<see cref="GroupName"/> 对应连接配置的 <c>ConfigId</c>，供 CodeFirst 按库建表。
+///     标记实体所属库组（兼容用）；<see cref="GroupName"/> = <c>ConfigId</c>。
+///     若需 <c>QueryableWithAttr&lt;T&gt;</c> / <c>InsertableWithAttr</c> 等，请优先使用 SqlSugar
+///     <c>[Tenant("configId")]</c>（扫描建表同样识别 Tenant）。
 /// </summary>
 [AttributeUsage(AttributeTargets.Class, AllowMultiple = false, Inherited = true)]
 public sealed class DatabaseGroupAttribute : Attribute

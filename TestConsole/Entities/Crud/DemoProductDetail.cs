@@ -1,4 +1,4 @@
-namespace TestConsole.Entities;
+namespace TestConsole.Entities.Crud;
 
 /// <summary>
 ///     IsJson 嵌套对象（非表实体；序列化进 JSON 列）。

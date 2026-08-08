@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
 using SqlSugar;
-using TestConsole.Entities;
+using SqlSugar.IOC;
+using TestConsole.Entities.Crud;
 
 namespace TestConsole.Scenarios;
 

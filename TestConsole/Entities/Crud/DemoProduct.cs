@@ -1,13 +1,14 @@
 using DuMes.Component.Database.CodeFirst;
 using SqlSugar;
 
-namespace TestConsole.Entities;
+namespace TestConsole.Entities.Crud;
 
 /// <summary>
 ///     演示实体（落在 ConfigId=<c>system</c> / searchpath=system）。
 /// </summary>
 [SugarTable("demo_product")]
-[DatabaseGroup("system")]
+[CodeFirst]
+[Tenant("system")]
 public class DemoProduct
 {
     [SugarColumn(IsPrimaryKey = true, ColumnName = "id", Length = 26)]

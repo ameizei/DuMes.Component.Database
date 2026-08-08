@@ -1,17 +1,22 @@
 using System.Reflection;
+using DuMes.Component.Database.Internal.Partition;
 using SqlSugar;
 using SqlSugar.IOC;
 
 namespace DuMes.Component.Database.CodeFirst;
 
 /// <summary>
-///     CodeFirst 辅助：按 <see cref="DatabaseGroupAttribute.GroupName"/>（= ConfigId）扫描实体并 <c>InitTables</c>。
-///     官方说明见 <see href="https://www.donet5.com/Home/Doc?typeId=1206">CodeFirst</see>。
+///     CodeFirst 辅助：仅扫描带 <see cref="CodeFirstAttribute"/> 的实体；
+///     按库标识（优先 <see cref="TenantAttribute"/>，兼容 <see cref="DatabaseGroupAttribute"/>）
+///     路由到 ConfigId 并 <c>InitTables</c>。标了 <c>[Tenant]</c> 后可用 <c>*WithAttr&lt;T&gt;()</c> 切库。
+///     见 <see href="https://www.donet5.com/Home/Doc?typeId=1206">CodeFirst</see>、
+///     <see href="https://www.donet5.com/Doc/1/2246">多租户</see>。
 /// </summary>
 public static class DatabaseCodeFirst
 {
     /// <summary>
-    ///     从程序集取出可 CodeFirst 建表的实体（具体类 + <see cref="SugarTable"/> + <see cref="DatabaseGroupAttribute"/>）。
+    ///     从程序集取出可 CodeFirst 建表的实体
+    ///     （具体类 + <see cref="SugarTable"/> + <see cref="CodeFirstAttribute"/> + Tenant/DatabaseGroup）。
     /// </summary>
     public static Type[] GetEntityTypes(Assembly assembly, Func<Type, bool> predicate = null)
     {
@@ -20,7 +25,7 @@ public static class DatabaseCodeFirst
     }
 
     /// <summary>
-    ///     从程序集取出指定 <paramref name="groupName"/>（ConfigId）下的实体类型。
+    ///     从程序集取出指定 ConfigId（Tenant / GroupName）下的实体类型。
     /// </summary>
     public static Type[] GetEntityTypes(Assembly assembly, string groupName, Func<Type, bool> predicate = null)
     {
@@ -41,7 +46,7 @@ public static class DatabaseCodeFirst
     }
 
     /// <summary>
-    ///     按 <see cref="DatabaseGroupAttribute.GroupName"/> 分组返回实体类型（键即 ConfigId）。
+    ///     按 ConfigId（Tenant / GroupName）分组返回实体类型。
     /// </summary>
     public static IReadOnlyDictionary<string, Type[]> GetEntityTypesByGroup(Assembly assembly, Func<Type, bool> predicate = null)
     {
@@ -50,7 +55,7 @@ public static class DatabaseCodeFirst
     }
 
     /// <summary>
-    ///     按 GroupName 分组扫描多个程序集。
+    ///     按 ConfigId 分组扫描多个程序集。
     /// </summary>
     public static IReadOnlyDictionary<string, Type[]> GetEntityTypesByGroup(IEnumerable<Assembly> assemblies, Func<Type, bool> predicate = null)
     {
@@ -59,7 +64,8 @@ public static class DatabaseCodeFirst
     }
 
     /// <summary>
-    ///     对指定连接执行 <c>CodeFirst.InitTables</c>；<paramref name="entityTypes"/> 为空则跳过。
+    ///     对指定连接建表：普通实体走 <c>CodeFirst.InitTables</c>；
+    ///     带 <see cref="DatabasePartitionAttribute"/> 的走 PostgreSQL 分区表创建。
     /// </summary>
     public static void InitTables(ISqlSugarClient db, params Type[] entityTypes)
     {
@@ -67,11 +73,22 @@ public static class DatabaseCodeFirst
         if (entityTypes == null || entityTypes.Length == 0)
             return;
 
-        db.CodeFirst.InitTables(entityTypes);
+        var normal = entityTypes
+            .Where(static t => t != null && t.GetCustomAttribute<DatabasePartitionAttribute>(inherit: true) == null)
+            .ToArray();
+        var partitioned = entityTypes
+            .Where(static t => t != null && t.GetCustomAttribute<DatabasePartitionAttribute>(inherit: true) != null)
+            .ToArray();
+
+        if (normal.Length > 0)
+            db.CodeFirst.InitTables(normal);
+
+        foreach (var type in partitioned)
+            PostgresPartitionBootstrapper.Ensure(db, type);
     }
 
     /// <summary>
-    ///     扫描程序集，按实体上的 <see cref="DatabaseGroupAttribute.GroupName"/> 路由到对应 ConfigId 并建表。
+    ///     扫描程序集，按 <c>[Tenant]</c> / <c>[DatabaseGroup]</c> 路由到对应 ConfigId 并建表。
     ///     可在业务任意时机调用（不必挂在 DI 注册上）。
     /// </summary>
     public static IReadOnlyDictionary<string, Type[]> InitTables(Assembly assembly, Func<Type, bool> predicate = null)
@@ -81,7 +98,7 @@ public static class DatabaseCodeFirst
     }
 
     /// <summary>
-    ///     扫描多个程序集并按 GroupName / ConfigId 建表。
+    ///     扫描多个程序集并按 ConfigId 建表。
     /// </summary>
     public static IReadOnlyDictionary<string, Type[]> InitTables(IEnumerable<Assembly> assemblies, Func<Type, bool> predicate = null)
     {
@@ -90,7 +107,7 @@ public static class DatabaseCodeFirst
     }
 
     /// <summary>
-    ///     仅对指定 GroupName（ConfigId）扫描建表。
+    ///     仅对指定 ConfigId 扫描建表。
     /// </summary>
     public static Type[] InitTables(string groupName, Assembly assembly, Func<Type, bool> predicate = null)
     {
@@ -102,6 +119,16 @@ public static class DatabaseCodeFirst
         var types = GetEntityTypes(assembly, id, predicate);
         InitTables(DbScoped.SugarScope.GetConnection(id), types);
         return types;
+    }
+
+    /// <summary>
+    ///     解析实体所属 ConfigId：优先 <see cref="TenantAttribute"/>（供 WithAttr 切库），
+    ///     其次 <see cref="DatabaseGroupAttribute"/>。
+    /// </summary>
+    public static string ResolveConfigId(Type type)
+    {
+        ArgumentNullException.ThrowIfNull(type);
+        return GetGroupName(type);
     }
 
     private static IReadOnlyDictionary<string, Type[]> InitTablesByGroup(IReadOnlyDictionary<string, Type[]> byGroup)
@@ -130,9 +157,19 @@ public static class DatabaseCodeFirst
 
     private static string GetGroupName(Type type)
     {
-        var attr = type.GetCustomAttribute<DatabaseGroupAttribute>(inherit: true);
-        return attr?.GroupName ?? string.Empty;
+        var tenant = type.GetCustomAttribute<TenantAttribute>(inherit: true);
+        if (tenant?.configId != null)
+        {
+            var id = tenant.configId.ToString();
+            if (!string.IsNullOrWhiteSpace(id))
+                return id.Trim();
+        }
+
+        var group = type.GetCustomAttribute<DatabaseGroupAttribute>(inherit: true);
+        return group?.GroupName ?? string.Empty;
     }
+
+    private static bool HasConfigIdAttribute(Type type) => GetGroupName(type).Length > 0;
 
     private static Type[] LoadTypes(Assembly assembly)
     {
@@ -164,7 +201,8 @@ public static class DatabaseCodeFirst
         var query = types
             .Where(static t => t is { IsClass: true, IsAbstract: false, IsGenericTypeDefinition: false })
             .Where(static t => t.GetCustomAttribute<SugarTable>(inherit: true) != null)
-            .Where(static t => t.GetCustomAttribute<DatabaseGroupAttribute>(inherit: true) != null);
+            .Where(static t => t.GetCustomAttribute<CodeFirstAttribute>(inherit: true) != null)
+            .Where(HasConfigIdAttribute);
 
         if (!string.IsNullOrEmpty(groupName))
             query = query.Where(t => string.Equals(GetGroupName(t), groupName, StringComparison.OrdinalIgnoreCase));

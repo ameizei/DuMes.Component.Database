@@ -1,4 +1,4 @@
-namespace TestConsole.Entities;
+namespace TestConsole.Entities.Crud;
 
 /// <summary>
 ///     IsJson 嵌套 List 元素。

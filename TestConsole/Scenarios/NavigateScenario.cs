@@ -1,6 +1,6 @@
 using Microsoft.Extensions.Logging;
 using SqlSugar;
-using TestConsole.Entities;
+using TestConsole.Entities.Nav;
 
 namespace TestConsole.Scenarios;
 
