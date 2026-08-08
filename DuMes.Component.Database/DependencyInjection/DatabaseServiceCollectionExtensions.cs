@@ -1,3 +1,4 @@
+using DuMes.Component.Database.Internal;
 using DuMes.Component.Database.Internal.Aop;
 using DuMes.Component.Database.Options;
 using Microsoft.Extensions.Configuration;
@@ -5,6 +6,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using SqlSugar;
 using SqlSugar.IOC;
 
@@ -34,7 +36,7 @@ public static class DatabaseServiceCollectionExtensions
         var options = section.Get<DatabaseComponentOptions>() ?? new DatabaseComponentOptions();
         configureOptions?.Invoke(options);
 
-        return Register(services, options, section);
+        return Register(services, options);
     }
 
     /// <summary>
@@ -49,17 +51,19 @@ public static class DatabaseServiceCollectionExtensions
         var options = new DatabaseComponentOptions();
         configureOptions(options);
 
-        return Register(services, options, null);
+        return Register(services, options);
     }
 
-    private static IServiceCollection Register(IServiceCollection services, DatabaseComponentOptions options,
-        IConfigurationSection configurationSection)
+    private static IServiceCollection Register(IServiceCollection services, DatabaseComponentOptions options)
     {
         options.Validate();
 
+        DatabaseConfigIdResolver.SetRegistered(options.Connections.Select(static c => c.ConfigId));
+
         services.AddSingleton(options);
-        if (configurationSection is not null)
-            services.Configure<DatabaseComponentOptions>(configurationSection);
+        // 与已校验单例保持一致（含 configureOptions 回调结果），避免 IOptions<> 与单例分叉
+        services.AddSingleton<IOptions<DatabaseComponentOptions>>(
+            Microsoft.Extensions.Options.Options.Create(options));
 
         var iocConfigs = BuildIocConfigs(options);
         services.AddSqlSugar(iocConfigs);

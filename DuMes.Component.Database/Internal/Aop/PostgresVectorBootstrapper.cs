@@ -27,7 +27,7 @@ internal static class PostgresVectorBootstrapper
         foreach (var connection in options.Connections)
         {
             var dbType = DatabaseComponentOptions.ResolveDbType(connection);
-            if (!IsPostgresFamily(dbType))
+            if (!PostgresFamily.IsPostgresFamily(dbType))
                 continue;
 
             var key = BuildDatabaseKey(connection, dbType);
@@ -98,19 +98,6 @@ internal static class PostgresVectorBootstrapper
             if (shouldClose)
                 npgsql.Close();
         }
-    }
-
-    private static bool IsPostgresFamily(IocDbType dbType)
-    {
-        return dbType is IocDbType.PostgreSQL
-            or IocDbType.Kdbndp
-            or IocDbType.OpenGauss
-            or IocDbType.HG
-            or IocDbType.GaussDB
-            or IocDbType.GaussDBNative
-            or IocDbType.Vastbase
-            or IocDbType.PolarDB
-            or IocDbType.TDSQLForPGODBC;
     }
 
     private static string BuildDatabaseKey(DatabaseConnectionOptions connection, IocDbType dbType)

@@ -21,18 +21,6 @@ internal static class PostgresPartitionBootstrapper
 {
     private static readonly Regex IdentRegex = new(@"^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
-    private static readonly HashSet<SqlSugar.DbType> SupportedDbTypes =
-    [
-        SqlSugar.DbType.PostgreSQL,
-        SqlSugar.DbType.OpenGauss,
-        SqlSugar.DbType.GaussDB,
-        SqlSugar.DbType.HG,
-        SqlSugar.DbType.Kdbndp,
-        SqlSugar.DbType.Vastbase,
-        SqlSugar.DbType.PolarDB,
-        SqlSugar.DbType.TDSQLForPGODBC
-    ];
-
     public static void Ensure(ISqlSugarClient db, Type entityType)
     {
         ArgumentNullException.ThrowIfNull(db);
@@ -42,10 +30,9 @@ internal static class PostgresPartitionBootstrapper
         if (partition == null)
             return;
 
-        if (!SupportedDbTypes.Contains(db.CurrentConnectionConfig.DbType))
+        if (!PostgresFamily.IsPostgresFamily(db.CurrentConnectionConfig.DbType))
             throw new InvalidOperationException(
                 $"实体 {entityType.Name} 标注了 {nameof(DatabasePartitionAttribute)}，但当前 DbType={db.CurrentConnectionConfig.DbType} 不支持 PostgreSQL 分区表。");
-
         if (partition.AheadCount < 1)
             throw new InvalidOperationException($"实体 {entityType.Name} 的 AheadCount 须 >= 1。");
         if (partition.PastCount < 0)
@@ -133,7 +120,7 @@ internal static class PostgresPartitionBootstrapper
 
             var isPartKey = string.Equals(col.DbColumnName, partColumn.DbColumnName, StringComparison.OrdinalIgnoreCase);
             var nullable = col.IsNullable && !isPartKey;
-            sb.Append("  ").Append(col.DbColumnName).Append(' ').Append(ResolvePgType(col));
+            sb.Append("  ").Append(col.DbColumnName).Append(' ').Append(PostgresColumnSql.ResolvePgType(col));
             sb.Append(nullable ? " NULL" : " NOT NULL");
         }
 
@@ -186,7 +173,7 @@ internal static class PostgresPartitionBootstrapper
             if (dbNames.Contains(col.DbColumnName))
                 continue;
 
-            var typeSql = ResolvePgType(col);
+            var typeSql = PostgresColumnSql.ResolvePgType(col);
             var isPartKey = string.Equals(col.DbColumnName, partColumn.DbColumnName, StringComparison.OrdinalIgnoreCase);
             // 有数据时：NOT NULL 必须带 DEFAULT，否则 ADD COLUMN 失败
             string sql;
@@ -197,7 +184,7 @@ internal static class PostgresPartitionBootstrapper
             else
             {
                 sql =
-                    $"ALTER TABLE {tableName} ADD COLUMN IF NOT EXISTS {col.DbColumnName} {typeSql} NOT NULL DEFAULT {ResolveDefaultLiteral(col)};";
+                    $"ALTER TABLE {tableName} ADD COLUMN IF NOT EXISTS {col.DbColumnName} {typeSql} NOT NULL DEFAULT {PostgresColumnSql.ResolveDefaultLiteral(col)};";
             }
 
             db.Ado.ExecuteCommand(sql);
@@ -236,7 +223,10 @@ internal static class PostgresPartitionBootstrapper
 
             var childName = $"{tableName}_{suffix}";
             if (db.DbMaintenance.IsAnyTable(childName, false))
+            {
+                EnsureIsPartitionOf(db, childName, tableName);
                 continue;
+            }
 
             var fromLiteral = from.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
             var toLiteral = to.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
@@ -249,6 +239,33 @@ internal static class PostgresPartitionBootstrapper
                  """;
             db.Ado.ExecuteCommand(sql);
         }
+    }
+
+    /// <summary>
+    ///     同名表已存在时，校验其确为指定父表的 PARTITION OF（经 pg_inherits），避免普通表占名导致静默漏建分区。
+    /// </summary>
+    private static void EnsureIsPartitionOf(ISqlSugarClient db, string childName, string parentName)
+    {
+        var actualParent = db.Ado.GetString(
+            """
+            SELECT p.relname
+            FROM pg_inherits i
+            JOIN pg_class c ON c.oid = i.inhrelid
+            JOIN pg_class p ON p.oid = i.inhparent
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE c.relname = @child
+              AND n.nspname = current_schema()
+            LIMIT 1
+            """,
+            new SugarParameter("@child", childName));
+
+        if (string.IsNullOrWhiteSpace(actualParent))
+            throw new InvalidOperationException(
+                $"表 {childName} 已存在但不是分区子表（无 pg_inherits）。请手工迁移或删表后重建。");
+
+        if (!string.Equals(actualParent, parentName, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException(
+                $"表 {childName} 已挂在父表 {actualParent} 下，与分区父表 {parentName} 不一致。请手工迁移或删表后重建。");
     }
 
     private static DateTime AddPeriod(DateTime value, DatabasePartitionGrain grain, int offset)
@@ -291,97 +308,5 @@ internal static class PostgresPartitionBootstrapper
             default:
                 throw new ArgumentOutOfRangeException(nameof(grain), grain, null);
         }
-    }
-
-    private static string ResolveDefaultLiteral(EntityColumnInfo col)
-    {
-        if (col.IsJson)
-            return "'{}'::jsonb";
-
-        var under = col.UnderType != null
-            ? Nullable.GetUnderlyingType(col.UnderType) ?? col.UnderType
-            : null;
-
-        if (under == typeof(bool))
-            return "false";
-        if (under == typeof(DateTime))
-            return "'1970-01-01'::timestamp";
-        if (under == typeof(decimal) || under == typeof(int) || under == typeof(long) || under == typeof(double) || under == typeof(float))
-            return "0";
-        if (under == typeof(Ulid) || under == typeof(string) || under is { IsEnum: true })
-            return "''";
-
-        var dt = (col.DataType ?? string.Empty).Trim().ToLowerInvariant();
-        if (dt is "bool" or "boolean" or "bit")
-            return "false";
-        if (dt.Contains("timestamp", StringComparison.Ordinal) || dt.Contains("datetime", StringComparison.Ordinal))
-            return "'1970-01-01'::timestamp";
-        if (dt is "int4" or "int8" or "integer" or "bigint" or "numeric" or "decimal" or "float8")
-            return "0";
-        if (dt is "jsonb")
-            return "'{}'::jsonb";
-
-        return "''";
-    }
-
-    private static string ResolvePgType(EntityColumnInfo col)
-    {
-        if (col.IsJson)
-            return "jsonb";
-
-        var under = col.UnderType != null
-            ? Nullable.GetUnderlyingType(col.UnderType) ?? col.UnderType
-            : null;
-
-        if (!string.IsNullOrWhiteSpace(col.DataType))
-        {
-            var dt = col.DataType.Trim().ToLowerInvariant();
-            if (dt.StartsWith("vector", StringComparison.Ordinal))
-                return col.DataType.Trim();
-
-            return dt switch
-            {
-                "varchar" or "character varying" => col.Length > 0 ? $"varchar({col.Length})" : "text",
-                "nvarchar" => col.Length > 0 ? $"varchar({col.Length})" : "text",
-                "decimal" or "numeric" => FormatNumeric(col),
-                "datetime" or "datetime2" or "timestamp" or "timestamp without time zone" => "timestamp",
-                "timestamptz" or "timestamp with time zone" => "timestamptz",
-                "bit" or "boolean" or "bool" => "boolean",
-                "int" or "int32" or "integer" => "int4",
-                "long" or "int64" or "bigint" => "int8",
-                "float" or "double" or "float8" => "float8",
-                "uniqueidentifier" or "uuid" => "uuid",
-                "text" => "text",
-                "jsonb" => "jsonb",
-                "json" => "json",
-                _ => col.Length > 0 && dt is "varchar" ? $"varchar({col.Length})" : dt
-            };
-        }
-
-        if (under == typeof(Ulid))
-            return "varchar(26)";
-        if (under == typeof(string))
-            return col.Length > 0 ? $"varchar({col.Length})" : "text";
-        if (under == typeof(DateTime))
-            return "timestamp";
-        if (under == typeof(bool))
-            return "boolean";
-        if (under == typeof(int))
-            return "int4";
-        if (under == typeof(long))
-            return "int8";
-        if (under == typeof(decimal))
-            return FormatNumeric(col);
-        if (under is { IsEnum: true })
-            return col.Length > 0 ? $"varchar({col.Length})" : "varchar(64)";
-
-        return "text";
-    }
-
-    private static string FormatNumeric(EntityColumnInfo col)
-    {
-        var precision = col.Length > 0 ? col.Length : 18;
-        var scale = col.DecimalDigits > 0 ? col.DecimalDigits : 2;
-        return $"numeric({precision},{scale})";
     }
 }

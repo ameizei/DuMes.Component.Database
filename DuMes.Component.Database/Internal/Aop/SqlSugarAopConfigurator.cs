@@ -31,9 +31,10 @@ internal static class SqlSugarAopConfigurator
         {
             var configId = connection.ConfigId.Trim();
             var client = db.GetConnection(configId);
+            var dbType = DatabaseComponentOptions.ResolveDbType(connection);
             ApplySerializeService(client);
-            ApplyTypeMappings(client);
-            ApplyMoreSettings(client, connection);
+            ApplyTypeMappings(client, dbType);
+            ApplyMoreSettings(client, dbType);
             BindAop(client, options, configId);
         }
     }
@@ -50,43 +51,57 @@ internal static class SqlSugarAopConfigurator
     /// <summary>
     ///     全局 EntityService：<see cref="Ulid"/> → <c>UlidTypeConverter</c>；
     ///     枚举 → SqlSugar 自带 <c>EnumToStringConvert</c>（库中存枚举名字符串）；
-    ///     <c>[DatabaseVector]</c> → <c>VectorTypeConverter</c> + <c>vector(n)</c>；
-    ///     <c>[DatabaseCoordinate]</c> → <c>CoordinateTypeConverter</c> + <c>vector(2|3)</c>。
+    ///     PG 系上 <c>[DatabaseVector]</c> → <c>VectorTypeConverter</c> + <c>vector(n)</c>；
+    ///     PG 系上 <c>[DatabaseCoordinate]</c> → <c>CoordinateTypeConverter</c> + <c>vector(2|3)</c>。
     /// </summary>
-    private static void ApplyTypeMappings(ISqlSugarClient client)
+    private static void ApplyTypeMappings(ISqlSugarClient client, IocDbType dbType)
     {
         var external = client.CurrentConnectionConfig.ConfigureExternalServices ??= new ConfigureExternalServices();
         var previous = external.EntityService;
+        var isPostgres = PostgresFamily.IsPostgresFamily(dbType);
         external.EntityService = (property, column) =>
         {
             previous?.Invoke(property, column);
 
-            var coordAttr = property.GetCustomAttribute<DatabaseCoordinateAttribute>(inherit: true);
-            if (coordAttr != null)
+            if (isPostgres)
             {
-                var coordType = Nullable.GetUnderlyingType(property.PropertyType) ?? property.PropertyType;
-                if (coordType != typeof(DatabaseCoordinate))
-                    throw new InvalidOperationException(
-                        $"属性 {property.DeclaringType?.Name}.{property.Name} 标注了 {nameof(DatabaseCoordinateAttribute)}，类型须为 {nameof(DatabaseCoordinate)}。");
+                var coordAttr = property.GetCustomAttribute<DatabaseCoordinateAttribute>(inherit: true);
+                if (coordAttr != null)
+                {
+                    var coordType = Nullable.GetUnderlyingType(property.PropertyType) ?? property.PropertyType;
+                    if (coordType != typeof(DatabaseCoordinate))
+                        throw new InvalidOperationException(
+                            $"属性 {property.DeclaringType?.Name}.{property.Name} 标注了 {nameof(DatabaseCoordinateAttribute)}，类型须为 {nameof(DatabaseCoordinate)}。");
 
-                column.SqlParameterDbType = typeof(SqlSugar.DbConvert.CoordinateTypeConverter);
-                column.DataType = $"vector({coordAttr.Dimensions})";
-                column.IsArray = false;
-                return;
+                    column.SqlParameterDbType = typeof(SqlSugar.DbConvert.CoordinateTypeConverter);
+                    column.DataType = $"vector({coordAttr.Dimensions})";
+                    column.IsArray = false;
+                    return;
+                }
+
+                var vectorAttr = property.GetCustomAttribute<DatabaseVectorAttribute>(inherit: true);
+                if (vectorAttr != null)
+                {
+                    var vectorType = Nullable.GetUnderlyingType(property.PropertyType) ?? property.PropertyType;
+                    if (vectorType != typeof(float[]) && vectorType != typeof(Vector))
+                        throw new InvalidOperationException(
+                            $"属性 {property.DeclaringType?.Name}.{property.Name} 标注了 {nameof(DatabaseVectorAttribute)}，类型须为 float[] 或 Pgvector.Vector。");
+
+                    column.SqlParameterDbType = typeof(SqlSugar.DbConvert.VectorTypeConverter);
+                    column.DataType = $"vector({vectorAttr.Dimensions})";
+                    column.IsArray = false;
+                    return;
+                }
             }
-
-            var vectorAttr = property.GetCustomAttribute<DatabaseVectorAttribute>(inherit: true);
-            if (vectorAttr != null)
+            else
             {
-                var vectorType = Nullable.GetUnderlyingType(property.PropertyType) ?? property.PropertyType;
-                if (vectorType != typeof(float[]) && vectorType != typeof(Vector))
+                // 非 PG：标了向量/坐标 Attribute 应尽早失败，避免 InitTables 生成非法类型
+                if (property.GetCustomAttribute<DatabaseCoordinateAttribute>(inherit: true) != null
+                    || property.GetCustomAttribute<DatabaseVectorAttribute>(inherit: true) != null)
+                {
                     throw new InvalidOperationException(
-                        $"属性 {property.DeclaringType?.Name}.{property.Name} 标注了 {nameof(DatabaseVectorAttribute)}，类型须为 float[] 或 Pgvector.Vector。");
-
-                column.SqlParameterDbType = typeof(SqlSugar.DbConvert.VectorTypeConverter);
-                column.DataType = $"vector({vectorAttr.Dimensions})";
-                column.IsArray = false;
-                return;
+                        $"属性 {property.DeclaringType?.Name}.{property.Name} 标注了向量/坐标特性，仅支持 PostgreSQL 及兼容库（当前 DbType={dbType}）。");
+                }
             }
 
             // 列上已显式指定转换器时不覆盖
@@ -116,10 +131,9 @@ internal static class SqlSugarAopConfigurator
         };
     }
 
-    private static void ApplyMoreSettings(ISqlSugarClient client, DatabaseConnectionOptions connection)
+    private static void ApplyMoreSettings(ISqlSugarClient client, IocDbType dbType)
     {
-        var dbType = DatabaseComponentOptions.ResolveDbType(connection);
-        if (dbType != IocDbType.PostgreSQL)
+        if (!PostgresFamily.IsPostgresFamily(dbType))
             return;
 
         client.CurrentConnectionConfig.MoreSettings ??= new ConnMoreSettings();

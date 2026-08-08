@@ -1,4 +1,5 @@
 using System.Reflection;
+using DuMes.Component.Database.Internal;
 using DuMes.Component.Database.Internal.Partition;
 using SqlSugar;
 using SqlSugar.IOC;
@@ -166,7 +167,7 @@ public static class DatabaseCodeFirst
             throw new ArgumentException("groupName 不能为空。", nameof(groupName));
         ArgumentNullException.ThrowIfNull(assembly);
 
-        var id = groupName.Trim();
+        var id = DatabaseConfigIdResolver.Resolve(groupName.Trim());
         var types = GetEntityTypes(assembly, id, predicate);
         InitTables(DbScoped.SugarScope.GetConnection(id), types);
         return types;
@@ -189,7 +190,8 @@ public static class DatabaseCodeFirst
             if (types.Length == 0)
                 continue;
 
-            var db = DbScoped.SugarScope.GetConnection(groupName);
+            var configId = DatabaseConfigIdResolver.Resolve(groupName);
+            var db = DbScoped.SugarScope.GetConnection(configId);
             InitTables(db, types);
         }
 
@@ -201,7 +203,7 @@ public static class DatabaseCodeFirst
         return types
             .GroupBy(GetGroupName, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(
-                static g => g.Key,
+                static g => DatabaseConfigIdResolver.Resolve(g.Key),
                 static g => g.OrderBy(static t => t.FullName, StringComparer.Ordinal).ToArray(),
                 StringComparer.OrdinalIgnoreCase);
     }
