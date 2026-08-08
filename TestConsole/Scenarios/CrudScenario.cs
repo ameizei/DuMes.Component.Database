@@ -1,3 +1,4 @@
+using DuMes.Component.Database.Entities;
 using Microsoft.Extensions.Logging;
 using SqlSugar;
 using SqlSugar.IOC;
@@ -14,27 +15,25 @@ internal static class CrudScenario
     {
         logger.LogInformation("======== [Crud] 基础增删改查 ========");
 
-        var productId = Ulid.NewUlid();
         var now = DateTime.Now;
         var supplierId = Ulid.NewUlid();
         var tagId1 = Ulid.NewUlid();
         var tagId2 = Ulid.NewUlid();
 
-        logger.LogInformation("[Crud] 增：Insertable（枚举 + IsJson 对象/List）");
-        var product = new DemoProduct
-        {
-            Id = productId,
-            Name = "widget-" + productId.ToString()[..8],
-            Price = 12.5m,
-            Status = DemoProductStatus.Draft,
-            Detail = new DemoProductDetail
+        logger.LogInformation("[Crud] 增：Insertable（枚举 + IsJson 对象/List；实体链式赋值）");
+        var product = new DemoProduct().NewId();
+        product
+            .Set(x => x.Name, "widget-" + product.Id.ToString()[..8])
+            .Set(x => x.Price, 12.5m)
+            .Set(x => x.Status, DemoProductStatus.Draft)
+            .Set(x => x.Detail, new DemoProductDetail
             {
                 Sku = "SKU-001",
                 WeightGram = 250,
                 SupplierId = supplierId,
                 PreferredStatus = DemoProductStatus.OnSale
-            },
-            Tags =
+            })
+            .Set(x => x.Tags,
             [
                 new DemoProductTag
                 {
@@ -50,10 +49,10 @@ internal static class CrudScenario
                     TagId = tagId2,
                     RelatedStatus = DemoProductStatus.Draft
                 }
-            ],
-            CreateTime = now,
-            IsDelete = false
-        };
+            ])
+            .Set(x => x.CreateTime, now)
+            .Set(x => x.IsDelete, false);
+        var productId = product.Id;
         var insertRows = await systemDb.Insertable(product).ExecuteCommandAsync();
         logger.LogInformation("[Crud] 插入 demo_product 行数={Rows} Id={Id} Status={Status}", insertRows, productId, product.Status);
 

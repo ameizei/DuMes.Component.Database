@@ -1,4 +1,5 @@
 using DuMes.Component.Database.CodeFirst;
+using DuMes.Component.Database.Entities;
 using SqlSugar;
 
 namespace TestConsole.Entities.Crud;
@@ -9,11 +10,8 @@ namespace TestConsole.Entities.Crud;
 [SugarTable("demo_product")]
 [CodeFirst]
 [Tenant("system")]
-public class DemoProduct
+public class DemoProduct : DatabaseEntity
 {
-    [SugarColumn(IsPrimaryKey = true, ColumnName = "id", Length = 26)]
-    public Ulid Id { get; set; }
-
     [SugarColumn(ColumnName = "name", Length = 100)]
     public string Name { get; set; } = string.Empty;
 

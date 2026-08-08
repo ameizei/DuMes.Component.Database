@@ -10,6 +10,7 @@
 DuMes.Component.Database/
 ├── DependencyInjection/     # AddComponentDatabase
 ├── Options/                 # DatabaseComponentOptions、DatabaseConnectionOptions
+├── Entities/                # DatabaseEntity 基类、NewId / Set 链式赋值
 ├── CodeFirst/               # [CodeFirst]/Tenant/Group/Partition/Inherit/Vector、GetEntityTypes、InitTables
 ├── Serialization/           # System.Text.Json（IsJson / ISerializeService）
 ├── Converters/              # Ulid / Vector 表列转换（EntityService）
@@ -81,7 +82,7 @@ builder.Services.AddComponentDatabase(o =>
 | 自动关连接 | 注册时固定 `IsAutoCloseConnection=true`；特殊场景可在业务侧自建 `SqlSugarClient` |
 | AOP | 经 `ILogger` + Serilog：`LogDebug` / `WriteWarning` / `WriteError`（见「组件内置行为」） |
 
-主键由业务在插入前赋值：`entity.Id = Ulid.NewUlid()`（不依赖雪花 `DatacenterId` / `WorkId`）。
+主键由业务在插入前赋值：推荐继承 `DatabaseEntity` 后 `.NewId()`，或手写 `entity.Id = Ulid.NewUlid()`（不依赖雪花 `DatacenterId` / `WorkId`）。
 
 ## 配置说明
 
@@ -311,16 +312,14 @@ var db = DbScoped.SugarScope.GetConnectionWithAttr<Product>();
 
 ```csharp
 using DuMes.Component.Database.CodeFirst;
+using DuMes.Component.Database.Entities;
 using SqlSugar;
 
 [SugarTable("product")]
 [CodeFirst]
 [Tenant("main")]
-public class Product
+public class Product : DatabaseEntity // 基类已含 Id（列 id）；也可不继承、自行声明主键
 {
-    [SugarColumn(IsPrimaryKey = true, ColumnName = "id", Length = 26)]
-    public Ulid Id { get; set; }
-
     [SugarColumn(ColumnName = "name")]
     public string Name { get; set; } = string.Empty;
 
@@ -340,28 +339,41 @@ public Ulid Id { get; set; }
 
 手写 SQL / 迁移脚本同样遵守：`create table product (...);`，列用 `create_time` 而非 `"CreateTime"`。
 
-## 主键：ULID
+## 主键：ULID 与实体基类
 
 约定使用 `Ulid` 作为实体主键类型（Crockford Base32，26 字符；库中一般为 `char(26)` / `varchar(26)`，列名 `id`）。
 
+推荐表实体继承 `DatabaseEntity`（仅含 `Id`，不带审计/软删字段），并用 lambda 链式赋值：
+
 ```csharp
-// 插入前赋值
+using DuMes.Component.Database.Entities;
+
+var row = new Product()
+    .NewId()
+    .Set(x => x.Name, "widget")
+    .Set(x => x.CreateTime, DateTime.Now);
+await DbScoped.SugarScope.Insertable(row).ExecuteCommandAsync();
+```
+
+仍可手写主键、不继承基类：
+
+```csharp
 var row = new Product
 {
     Id = Ulid.NewUlid(),
     Name = "widget",
     CreateTime = DateTime.Now
 };
-await DbScoped.SugarScope.Insertable(row).ExecuteCommandAsync();
 ```
 
 说明：
 
-1. **生成**：`Ulid.NewUlid()`（可排序；与审计字段用 `DateTime.Now` 无关）。
+1. **生成**：`.NewId()` 或 `Ulid.NewUlid()`（可排序；与审计字段用 `DateTime.Now` 无关）。
 2. **勿用雪花**：本组件不配置 `SnowFlakeSingle` / `DatacenterId` / `WorkId`。
 3. **全局映射（Ulid）**：`EntityService` 为 `Ulid` / `Ulid?` 挂载 `UlidTypeConverter`（`varchar(26)`）；实体列不必写 `SqlParameterDbType`。
 4. **全局映射（枚举）**：`EntityService` 为枚举 / 可空枚举挂载 SqlSugar 自带 `EnumToStringConvert`，库中存枚举**名称**（如 `OnSale`），非数值；列上已显式指定 `SqlParameterDbType` 时不覆盖。
 5. **可空值类型**：业务上「可无」的外键可用 `Ulid?`；主键仍写 `Ulid`，插入前必须赋值。
+6. **基类范围**：`DatabaseEntity` 只承载身份；`[SugarTable]` / `[CodeFirst]` / `[Tenant]` 与业务列由派生类声明。
 
 ## 使用
 
@@ -414,7 +426,7 @@ catch
 ## 注意事项
 
 1. **`DbType` 可配，默认 PostgreSQL**：省略时按 `IocDbType.PostgreSQL`；改其它类型须补齐驱动包。
-2. **主键 ULID**：插入前 `Ulid.NewUlid()`；不要混用雪花 `long` 主键策略。
+2. **主键 ULID**：插入前 `.NewId()` 或 `Ulid.NewUlid()`；不要混用雪花 `long` 主键策略。推荐继承 `DatabaseEntity`。
 3. **先 Serilog 再 Database（强制）**：本组件已依赖 `DuMes.Component.Serilog`；宿主须 `UseComponentSerilog()`，否则 `LogDebug` / `Write*` 无法按约定输出。
 4. **ConfigId 唯一**：同一 `Connections`（含从库）内忽略大小写重复则启动失败。
 5. **密钥**：连接串勿提交真实密码；用 Development / Production 分文件 + Secrets。
@@ -437,6 +449,7 @@ catch
 
 ```csharp
 using DuMes.Component.Database.DependencyInjection;
+using DuMes.Component.Database.Entities; // DatabaseEntity / NewId / Set
 using DuMes.Component.Database.Options;
 using DuMes.Component.Serilog; // Write*
 using SqlSugar.IOC; // DbScoped
