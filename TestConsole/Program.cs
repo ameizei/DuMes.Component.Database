@@ -39,6 +39,7 @@ await CrudScenario.RunAsync(systemDb, logger);
 await MultiDbScenario.RunAsync(systemDb, demoDb, logger);
 await NavigateScenario.RunAsync(systemDb, logger);
 await PartitionScenario.RunAsync(systemDb, logger);
+await InheritScenario.RunAsync(systemDb, logger);
 
 logger.LogInformation("TestConsole 全部场景完成。");
 await host.StopAsync();

@@ -65,7 +65,8 @@ public static class DatabaseCodeFirst
 
     /// <summary>
     ///     对指定连接建表：普通实体走 <c>CodeFirst.InitTables</c>；
-    ///     带 <see cref="DatabasePartitionAttribute"/> 的走 PostgreSQL 分区表创建。
+    ///     带 <see cref="DatabasePartitionAttribute"/> 的走 PostgreSQL 分区表；
+    ///     带 <see cref="DatabaseInheritAttribute"/> 的走 PostgreSQL <c>INHERITS</c> 子表（父先于子）。
     /// </summary>
     public static void InitTables(ISqlSugarClient db, params Type[] entityTypes)
     {
@@ -73,18 +74,68 @@ public static class DatabaseCodeFirst
         if (entityTypes == null || entityTypes.Length == 0)
             return;
 
-        var normal = entityTypes
-            .Where(static t => t != null && t.GetCustomAttribute<DatabasePartitionAttribute>(inherit: true) == null)
+        var list = entityTypes.Where(static t => t != null).ToArray();
+        foreach (var type in list)
+        {
+            var inherit = type.GetCustomAttribute<DatabaseInheritAttribute>(inherit: false) != null;
+            var partition = type.GetCustomAttribute<DatabasePartitionAttribute>(inherit: true) != null;
+            if (inherit && partition)
+                throw new InvalidOperationException(
+                    $"实体 {type.Name} 不能同时标注 {nameof(DatabaseInheritAttribute)} 与 {nameof(DatabasePartitionAttribute)}。");
+        }
+
+        var inheritChildren = list
+            .Where(static t => t.GetCustomAttribute<DatabaseInheritAttribute>(inherit: false) != null)
             .ToArray();
-        var partitioned = entityTypes
-            .Where(static t => t != null && t.GetCustomAttribute<DatabasePartitionAttribute>(inherit: true) != null)
+        var partitioned = list
+            .Where(static t => t.GetCustomAttribute<DatabasePartitionAttribute>(inherit: true) != null)
             .ToArray();
+        var special = new HashSet<Type>(inheritChildren.Concat(partitioned));
+        var normal = list.Where(t => !special.Contains(t)).ToArray();
 
         if (normal.Length > 0)
             db.CodeFirst.InitTables(normal);
 
         foreach (var type in partitioned)
             PostgresPartitionBootstrapper.Ensure(db, type);
+
+        foreach (var type in OrderInheritChildren(inheritChildren))
+            PostgresInheritBootstrapper.Ensure(db, type);
+    }
+
+    /// <summary>
+    ///     继承子表拓扑排序：若父实体也是本批 Inherit 子表，则父先于子；检测环。
+    /// </summary>
+    private static Type[] OrderInheritChildren(Type[] inheritChildren)
+    {
+        if (inheritChildren.Length <= 1)
+            return inheritChildren;
+
+        var set = inheritChildren.ToHashSet();
+        var result = new List<Type>(inheritChildren.Length);
+        var visiting = new HashSet<Type>();
+        var visited = new HashSet<Type>();
+
+        void Visit(Type type)
+        {
+            if (visited.Contains(type))
+                return;
+            if (!visiting.Add(type))
+                throw new InvalidOperationException($"继承实体存在环：{type.Name}");
+
+            var parent = PostgresInheritBootstrapper.ResolveParentEntity(type);
+            if (set.Contains(parent))
+                Visit(parent);
+
+            visiting.Remove(type);
+            visited.Add(type);
+            result.Add(type);
+        }
+
+        foreach (var type in inheritChildren.OrderBy(static t => t.FullName, StringComparer.Ordinal))
+            Visit(type);
+
+        return result.ToArray();
     }
 
     /// <summary>
