@@ -10,11 +10,11 @@
 DuMes.Component.Database/
 ├── DependencyInjection/     # AddComponentDatabase
 ├── Options/                 # DatabaseComponentOptions、DatabaseConnectionOptions
-├── Entities/                # DatabaseEntity 基类、NewId / Set 链式赋值
-├── Audit/                   # 统一表 log_audit（被改行 Id、改前改后、操作人/时间）
-├── CodeFirst/               # [CodeFirst]/Tenant/Group/Partition/Inherit/Vector、GetEntityTypes、InitTables
-├── Serialization/           # System.Text.Json（IsJson / ISerializeService）
-├── Converters/              # Ulid / Vector 表列转换（EntityService）
+├── Entities/                # DatabaseEntity / Record / Business、NewId / Set / By / At / Touch / SoftDelete
+├── Audit/                   # 统一表 log_audit、DatabaseAuditBuilder / DatabaseAuditRef
+├── CodeFirst/               # [CodeFirst]/Tenant/Group/Partition/Inherit/Jsonb/Vector/Coordinate、GetEntityTypes、InitTables
+├── Serialization/           # System.Text.Json（IsJson / ISerializeService / DatabaseJsonOptions）
+├── Converters/              # Ulid / Vector / Coordinate 表列转换（命名空间 SqlSugar.DbConvert）
 └── Internal/
     ├── Aop/                 # 序列化挂载 / SQL AOP / 启动建库与架构 / Warmup
     ├── Config/              # ConfigId 注册与忽略大小写解析
@@ -27,6 +27,7 @@ DuMes.Component.Database/
 |------|------|
 | SqlSugar / SqlSugar.IOC | ORM、多库 `ConfigId`、`DbScoped.SugarScope` |
 | Npgsql | 默认 `PostgreSQL` 时的 ADO.NET 驱动（NoDrive 包需显式引用） |
+| Pgvector | `vector` 类型与 Npgsql 映射（embedding / 坐标列） |
 | Ulid | 主键生成（`Ulid.NewUlid()`）；与 SqlSugar 类型映射配合 |
 | DuMes.Component.Serilog | **包依赖**；宿主须 `UseComponentSerilog`；全量 SQL / 慢 SQL / 错误均走此管道 |
 
@@ -79,7 +80,7 @@ builder.Services.AddComponentDatabase(o =>
 | SqlSugar.IOC 多库注册 | 每条 `Connections` → 一个 `IocConfig`（`DbType` 可配，默认 PostgreSQL） |
 | `DbScoped.SugarScope` / `ISqlSugarClient` | 业务侧查询、事务入口 |
 | 启动建库 / 架构 | `IHostedService`：`CreateDatabase` + PG `searchpath` schema（固定开启） |
-| CodeFirst | 实体须标 `[CodeFirst]`（表明非 DbFirst）+ `[Tenant]`/`[DatabaseGroup]` + `[SugarTable]`；`InitTables(assembly)` 按 ConfigId 建表 |
+| CodeFirst | 实体须标 `[CodeFirst]`（表明非 DbFirst）+ `[Tenant]`/`[DatabaseGroup]` + `[SugarTable]`；业务侧调用 `InitTables` / `GetEntityTypes`（Warmup **不**扫业务程序集） |
 | 自动关连接 | 注册时固定 `IsAutoCloseConnection=true`；特殊场景可在业务侧自建 `SqlSugarClient` |
 | AOP | 经 `ILogger` + Serilog：`LogDebug` / `WriteWarning` / `WriteError`（见「组件内置行为」） |
 
@@ -102,7 +103,7 @@ builder.Services.AddComponentDatabase(o =>
 | `ConfigId` | string | — | 是 | 多库标识；同一列表内忽略大小写唯一 |
 | `ConnectionString` | string | — | 是 | 连接串（格式随 `DbType`）；空则启动报错 |
 | `DbType` | `IocDbType` | `PostgreSQL` | 否 | 数据库类型，见 [IocDbType](https://www.donet5.com/Doc/1/2247)；**当前默认 PostgreSQL**；从库未写时继承主库 |
-| `Slaves` | array | `[]` | 否 | 从库列表；项结构同连接（须有 `ConfigId` + `ConnectionString`） |
+| `Slaves` | array | `[]` | 否 | 从库列表；项结构同连接（须有 `ConfigId` + `ConnectionString`）。仅读写分离；**不参与** Warmup 建库/建表、`AuditConfigIds`、`[Tenant]` 路由 |
 
 ### 组件内置行为（不可配置项）
 
@@ -110,16 +111,16 @@ builder.Services.AddComponentDatabase(o =>
 
 | 行为 | 说明 |
 |------|------|
-| 配置校验 | 启动时 `Validate()`：节存在、连接非空、`ConfigId` 唯一、`DbType` 合法 |
-| 自动建库 / 架构 | 固定开启：`CreateDatabase()`；建架构按 `DbType` 选 SQL——PG 系（含人大金仓/OpenGauss 等）`CREATE SCHEMA IF NOT EXISTS`（读 `searchpath`）；SQL Server 查 `sys.schemas` 后建（架构名取 `ConfigId`）；MySQL / Sqlite / Oracle 等**不支持独立架构**则跳过。见 [库表管理](https://www.donet5.com/Home/Doc?typeId=1203) |
-| 统一审计表 | Warmup 仅在 `AuditConfigIds`（默认第一连接）上建 `log_audit`；写入请 `GetConnection(auditConfigId)` |
-| CodeFirst | 扫描建表须同时具备：`[CodeFirst]`（非 DbFirst）+ `[SugarTable]` + `[Tenant("configId")]`（优先；兼容 `[DatabaseGroup]`）。无 `[CodeFirst]` 的表实体不参与 InitTables。`QueryableWithAttr` 仍只依赖 Tenant。见 [CodeFirst](https://www.donet5.com/Home/Doc?typeId=1206)、[多租户](https://www.donet5.com/Doc/1/2246) |
-| PG 分区表 | `[DatabasePartition]` + `[DatabasePartitionField]`；InitTables 建父表/`PARTITION BY RANGE`/子分区。**已存在时对比实体增删列**（有数据亦可：对父表 `ADD`/`DROP COLUMN` 级联子分区；分区键不可删；新增非空列带 DEFAULT）。`[SugarIndex]` 建在**父表**（声明式分区落到子分区）。非 SqlSugar SplitTable |
-| PG 继承表 | 子实体 C# 继承父实体并标 `[DatabaseInherit]`；InitTables 建父表后 `CREATE TABLE child (...) INHERITS (parent)`。子类只声明本地列；父列变更由父实体同步并传播到子表。`[SugarIndex]` **不随 INHERITS 传播**，父/子实体各自建在对应表上。与分区表互斥。见 [表继承](https://www.postgresql.org/docs/current/ddl-inherit.html) |
+| 配置校验 | 启动时 `Validate()`：节存在、连接非空、`ConfigId` 唯一（含从库）、`DbType` 合法；`AuditConfigIds` 须为主库 ConfigId |
+| 自动建库 / 架构 | 固定开启：仅对**主库** `CreateDatabase()`；建架构按 `DbType` 选 SQL——PG 系（含人大金仓/OpenGauss 等）`CREATE SCHEMA IF NOT EXISTS`（读 `searchpath`）；SQL Server 查 `sys.schemas` 后建（架构名取 `ConfigId`）；MySQL / Sqlite / Oracle 等**不支持独立架构**则跳过。达梦 `Dm` 仅尝试 PG 方言建 SCHEMA，**不**纳入分区/向量/小写 MoreSettings。见 [库表管理](https://www.donet5.com/Home/Doc?typeId=1203) |
+| 统一审计表 | Warmup 仅在 `AuditConfigIds`（默认第一连接）上建 `log_audit`（直接 `InitTables(db, typeof(DatabaseAuditRecord))`，审计实体无 Tenant，**不会**被业务 `InitTables(assembly)` 扫到）；写入请 `GetConnection(auditConfigId)` |
+| CodeFirst | 扫描建表须同时具备：`[CodeFirst]`（非 DbFirst）+ `[SugarTable]` + `[Tenant("configId")]`（优先；兼容 `[DatabaseGroup]`）。无 `[CodeFirst]` 的表实体不参与 InitTables。另有 `GetEntityTypes` / `GetEntityTypesByGroup` / `InitTables(groupName, assembly)`。`QueryableWithAttr` 仍只依赖 Tenant。见 [CodeFirst](https://www.donet5.com/Home/Doc?typeId=1206)、[多租户](https://www.donet5.com/Doc/1/2246) |
+| PG 分区表 | `[DatabasePartition(Grain)]` + `[DatabasePartitionField]`；`Grain`：`Year` / `Quarter` / `Month` / `Day`；默认 `AheadCount=3`、`PastCount=1`（以 `DateTime.Now` 为锚，只建该窗口内子分区，**不**自动补历史窗外）。InitTables 建父表/`PARTITION BY RANGE`/子分区。DDL 走连接当前 `search_path`。**已存在时对比实体增删列**（有数据亦可：对父表 `ADD`/`DROP COLUMN` 级联子分区；分区键不可删；新增非空列尽量带 DEFAULT，部分类型可能无法生成）。`[SugarIndex]` 建在**父表**。非 SqlSugar SplitTable |
+| PG 继承表 | 子实体 C# 继承父实体并标 `[DatabaseInherit]`；InitTables 建父表后 `CREATE TABLE child (本地列…) INHERITS (parent)`（子表**不**单独写 PRIMARY KEY，身份列在父表）。子类只声明本地列；父列变更由父实体同步。`[SugarIndex]` / `[DatabaseJsonbIndex]` / `[DatabaseVectorIndex]` **不随 INHERITS 传播**（索引特性 `Inherited=false`，子类须各自声明）。与分区表互斥。见 [表继承](https://www.postgresql.org/docs/current/ddl-inherit.html) |
 | PG jsonb GIN | `[DatabaseJsonbIndex("ix_{table}_x", nameof(Prop))]` → `USING GIN (col jsonb_path_ops)`（默认）；`Ops` 可选 `jsonb_ops`。普通/分区/继承表 InitTables 时补建。`[SugarIndex]` 仅 B-tree，不能代替。见 [JSON Indexing](https://www.postgresql.org/docs/current/datatype-json.html#JSON-INDEXING) |
-| PG 向量列 | `[DatabaseVector(n)]` 标在 `float[]` / `Pgvector.Vector` 上 → 列类型 `vector(n)`；启动时 `CREATE EXTENSION IF NOT EXISTS vector` + Npgsql `UseVector`（库须已支持 pgvector）。见 [pgvector](https://github.com/pgvector/pgvector) |
+| PG 向量列 | `[DatabaseVector(n)]` 标在 `float[]` / `Pgvector.Vector` 上 → 列类型 `vector(n)`；启动时 `CREATE EXTENSION IF NOT EXISTS vector` + Npgsql `UseVector`（库须已支持 pgvector；扩展失败仅 Warning）。**非 PG 系**实体若标了向量/坐标特性，配置阶段即抛错。见 [pgvector](https://github.com/pgvector/pgvector) |
 | PG 坐标列 | `[DatabaseCoordinate(2|3)]` + 属性类型 `DatabaseCoordinate` → `vector(2)` / `vector(3)`（与 embedding 共用 pgvector，语义为货位/位姿）。内存距离 `DatabaseCoordinate.Distance`；SQL 近邻 `ORDER BY col <-> @q::vector` |
-| PG 向量索引 | `[DatabaseVectorIndex("ix_{table}_x", nameof(Prop))]` → 默认 `USING hnsw (col vector_l2_ops)`；可选 IVFFlat、`Cosine`/`InnerProduct`，以及 `M`/`EfConstruction`/`Lists`。embedding 与坐标列通用。见 [Indexing](https://github.com/pgvector/pgvector#indexing) |
+| PG 向量索引 | `[DatabaseVectorIndex("ix_{table}_x", nameof(Prop))]` → 默认 `USING hnsw (col vector_l2_ops)`；可选 IVFFlat、`Cosine`/`InnerProduct`，以及属性 `M`/`EfConstruction`/`Lists`（`0`=不写 WITH）。embedding 与坐标列通用。见 [Indexing](https://github.com/pgvector/pgvector#indexing) |
 | `IsAutoCloseConnection` | 固定 `true`。若业务必须手动管连接，请在业务逻辑中单独 `new SqlSugarClient(...)` |
 | `PgSqlIsAutoToLower` | PostgreSQL 时固定 `true`（含 CodeFirst）；实体列须显式 `ColumnName`（见「命名约定」） |
 | 全量 SQL | `OnLogExecuting` → `ILogger.LogDebug`（赋值后 SQL）。**仅 Development** 会进**调试窗口**（Serilog：Development 最低 Debug；其它环境最低 Information，故 Production **不会**打全量 SQL） |
@@ -128,7 +129,7 @@ builder.Services.AddComponentDatabase(o =>
 | 与 MEL 区别 | `LogDebug` **不落盘**；只有 `WriteWarning` / `WriteError` 写文件（见 Serilog README） |
 | Ulid 映射 | `EntityService` 全局挂载 `UlidTypeConverter` → `varchar(26)`；`OnExecutingChangeSql` 将参数中的 `Ulid` 转字符串（覆盖 InsertNav 等绕过转换器的路径） |
 | 枚举映射 | `EntityService` 全局挂载 SqlSugar `EnumToStringConvert` → 库中存**枚举名**（仅**表列**） |
-| IsJson | 表列 `IsJson=true` + `ColumnDataType=jsonb`；经 `DatabaseSerializeService`（System.Text.Json）序列化：驼峰、枚举名、Ulid 字符串 |
+| IsJson | 表列 `IsJson=true` + `ColumnDataType=jsonb`；经 `DatabaseSerializeService` / `DatabaseJsonOptions`（System.Text.Json）序列化：驼峰、枚举名、Ulid 字符串、`DateTime`=`yyyy-MM-dd HH:mm:ss` |
 | 环境 | 全量 SQL（`LogDebug`） | 慢 SQL / 错误（`Write*`） |
 |------|------------------------|---------------------------|
 | Development | ✓ 调试窗口 | ✓ `logs/sql_slow.log` / `logs/sql_error.log` |
@@ -209,7 +210,7 @@ public class Product { /* ... */ }
 [Tenant("demo")]
 public class AuditLog { /* ... */ }
 
-// PostgreSQL 按月分区表（[SugarIndex] 建在父表）
+// PostgreSQL 分区表（Grain: Year/Quarter/Month/Day；[SugarIndex] 建在父表）
 [SugarTable("order_log")]
 [CodeFirst]
 [Tenant("main")]
@@ -225,7 +226,7 @@ public class OrderLog
     public DateTime CreateTime { get; set; }
 }
 
-// PostgreSQL 继承表（C# 继承镜像 INHERITS；与分区表互斥；索引各自声明）
+// PostgreSQL 继承表（C# 继承镜像 INHERITS；与分区表互斥；子表无独立 PK；索引各自声明）
 [SugarTable("vehicle")]
 [CodeFirst]
 [Tenant("main")]
@@ -243,7 +244,7 @@ public class Vehicle
 [CodeFirst]
 [Tenant("main")]
 [DatabaseInherit]
-[SugarIndex("ix_{table}_doors", nameof(Doors), OrderByType.Asc)]
+[SugarIndex("ix_{table}_doors", nameof(Doors), OrderByType.Asc)] // INHERITS 不传播；须在子实体重声明
 public class Car : Vehicle
 {
     [SugarColumn(ColumnName = "doors")]
@@ -282,7 +283,11 @@ public class ProductInfo
 [Tenant("main")]
 [DatabaseVectorIndex("ix_{table}_embedding", nameof(Embedding))]
 // → CREATE INDEX … USING hnsw (embedding vector_l2_ops)
-// 余弦：DatabaseVectorIndexOps.Cosine ↔ ORDER BY embedding <=> @q
+// 余弦 / 调参示例：
+// [DatabaseVectorIndex("ix_{table}_embedding", nameof(Embedding),
+//     DatabaseVectorIndexMethod.Hnsw, DatabaseVectorIndexOps.Cosine,
+//     M = 16, EfConstruction = 64)]
+// IVFFlat：Method=Ivfflat + Lists≈rows/1000；查询运算符须与 Ops 一致
 public class DocEmbedding
 {
     [SugarColumn(IsPrimaryKey = true, ColumnName = "id", Length = 26)]
@@ -315,8 +320,11 @@ public class WhLocation
 // var d = DatabaseCoordinate.Distance(a.SlotXy, b.SlotXy);
 // SQL：ORDER BY slot_xy <-> '[0,0]'::vector
 
-// 建表（按 Tenant → ConfigId）
+// 扫描 / 建表（按 Tenant → ConfigId）
+var types = DatabaseCodeFirst.GetEntityTypes(typeof(Product).Assembly);
+var byGroup = DatabaseCodeFirst.GetEntityTypesByGroup(typeof(Product).Assembly);
 var map = DatabaseCodeFirst.InitTables(typeof(Product).Assembly);
+// 只建某一 ConfigId：DatabaseCodeFirst.InitTables("main", typeof(Product).Assembly);
 
 // 按特性切库 CRUD（SqlSugar 多租户）
 var list = await DbScoped.SugarScope.QueryableWithAttr<Product>().ToListAsync();
@@ -369,26 +377,30 @@ public Ulid Id { get; set; }
 
 ## 字段审计（统一表 `log_audit`）
 
-组件内置统一审计表实体 [`DatabaseAuditRecord`](DuMes.Component.Database/Audit/DatabaseAuditRecord.cs)。Warmup 按 **`AuditConfigIds`** 建表（默认第一连接；SaaS 请显式指向 `record` 等）。写入须用对应连接，例如 `GetConnection("record")`。
+组件内置统一审计表实体 [`DatabaseAuditRecord`](DuMes.Component.Database/Audit/DatabaseAuditRecord.cs)（继承 [`DatabaseRecordEntity`](DuMes.Component.Database/Entities/DatabaseRecordEntity.cs)）与构造器 [`DatabaseAuditBuilder`](DuMes.Component.Database/Audit/DatabaseAuditBuilder.cs)。Warmup 按 **`AuditConfigIds`** 建表（默认第一连接；SaaS 请显式指向 `record` 等）。写入须用对应连接，例如 `GetConnection("record")`。
 
 | 列 | 说明 |
 |------|------|
-| `id` | 本条审计主键 |
+| `id` | 本条审计主键（`DatabaseEntity`） |
+| `creator_id` / `creation_time` | 操作人与时间（`DatabaseRecordEntity`） |
 | `entity_name` / `entity_id` | 被修改的业务行（类型名 + 行 Id） |
 | `action` | `Create` / `Update` / `Delete` |
-| `create_user_id` / `create_user_name` / `create_time` | 操作人与时间 |
 | `changes` | jsonb：字段改前/改后列表 |
 
 `changes[].kind`：`Scalar` / `Nested` / `Image` / `Icon`（后两者供前台按图/图标展示）/ `List`（含 `added`/`removed`）。
 
+组件 API（推荐直接用）：`For` → `By` / `At` → `Scalar` / `Nested` / `Image` / `Icon` / `List` / `Change` → `Build`；`HasChanges` 为空则不写库。
+
 ```csharp
 var fromDb = await db.Queryable<Product>().InSingleAsync(id);
 var builder = DatabaseAuditBuilder.For(nameof(Product), fromDb.Id, "Update")
-    .By(userId, userName);
+    .By(userId);
 
-fromDb.WithAudit(builder)
-    .SetName(fromDb.Name, fromUi.Name)
-    .SetTags(fromDb.Tags, fromUi.Tags);
+if (fromDb.Name != fromUi.Name)
+{
+    builder.Scalar("Name", fromDb.Name, fromUi.Name, label: "名称");
+    fromDb.Name = fromUi.Name;
+}
 
 if (!builder.HasChanges)
     return; // 未改任何字段：不 Update、不插审计
@@ -404,7 +416,9 @@ var logs = await auditDb.Queryable<DatabaseAuditRecord>()
     .ToListAsync();
 ```
 
-前台 JSON 形态示例（驼峰，与组件 `DatabaseJsonOptions` 一致）：
+> **`WithAudit(...).SetXxx(前,后)` 不是组件 API**：由业务实体自建包装类（见 `TestConsole` 的 `DemoProduct` / `DemoUser` / `DemoStation`），内部仍调用 `builder.Scalar` / `List`。组件**不提供**整对象万能 Diff。
+
+前台 JSON 形态示例（驼峰，与组件 `DatabaseJsonOptions` 一致；`creationTime` 格式为 `yyyy-MM-dd HH:mm:ss`）：
 
 ```json
 {
@@ -412,9 +426,8 @@ var logs = await auditDb.Queryable<DatabaseAuditRecord>()
   "entityName": "Station",
   "entityId": "...",
   "action": "Update",
-  "createUserId": "...",
-  "createUserName": "张三",
-  "createTime": "2026-08-08T21:00:00",
+  "creatorId": "...",
+  "creationTime": "2026-08-08 21:00:00",
   "changes": [
     { "path": "Name", "label": "工站名称", "kind": "Scalar", "before": "ST-01", "after": "ST-02" },
     { "path": "PLC.Name", "label": "PLC名称", "kind": "Nested", "before": "Siemens-S7", "after": "Omron-NJ" },
@@ -441,16 +454,27 @@ var logs = await auditDb.Queryable<DatabaseAuditRecord>()
 说明：
 
 1. 统一表，不必再为每个业务建审计子类；按 `entity_id` 查某行的全部变更历史。
-2. **不提供**整对象万能 Diff：实体链式 `SetName(前,后)` / `SetTags(前,后)`。
+2. 字段级变更用 `DatabaseAuditBuilder`；需要链式 `SetXxx` 时在业务实体上自建包装（见上）。
 3. `builder.HasChanges == false` → 直接成功，不写业务表、不写审计表。
-4. `JsonDocument` 多态配置：库列统一 `JsonDocument`，按品牌转实体后再 `SetXxx`（见 `DemoStation` / `SiemensPlcConfig`）。
-5. **多对多 / 外键只存 Id 时**：业务列仍只存 Id；**审计建议写时快照** `DatabaseAuditRef`（`id` + 当时 `name`，可选 `extra`）。前台直接展示，不必再查；角色改名/删除后历史仍正确。后期按 Id 反查只能看到「当前」名称，且可能已查不到。见 `DemoUser`。
+4. `JsonDocument` 多态配置：库列统一 `JsonDocument`，按品牌转实体后再记 Nested/Scalar（见 `DemoStation` / `SiemensPlcConfig`）。
+5. **多对多 / 外键只存 Id 时**：业务列仍只存 Id；**审计建议写时快照** `DatabaseAuditRef`（`Of` / `FromIds`：`id` + 当时 `name`，可选 `extra`）。前台直接展示，不必再查；角色改名/删除后历史仍正确。后期按 Id 反查只能看到「当前」名称，且可能已查不到。见 `DemoUser`。
 
 ```csharp
-// 写审计时带上名称解析（查字典/缓存即可）
-user.WithAudit(builder)
-    .SetRoleIds(user.RoleIds, [roleA, roleB], id => roleNameMap[id])
-    .SetProfileId(user.ProfileId, newProfileId, id => profileNameMap[id.Value]);
+// 业务列写 Id；审计写带名称的 DatabaseAuditRef 快照（查字典/缓存即可）
+var beforeRoles = DatabaseAuditRef.FromIds(user.RoleIds, id => roleNameMap[id]);
+var afterRoles = DatabaseAuditRef.FromIds([roleA, roleB], id => roleNameMap[id]);
+builder.List("RoleIds", beforeRoles, afterRoles, label: "角色");
+user.RoleIds = [roleA, roleB];
+
+if (user.ProfileId != newProfileId)
+{
+    builder.Scalar(
+        "ProfileId",
+        user.ProfileId is null ? null : DatabaseAuditRef.Of(user.ProfileId.Value, profileNameMap[user.ProfileId.Value]),
+        newProfileId is null ? null : DatabaseAuditRef.Of(newProfileId.Value, profileNameMap[newProfileId.Value]),
+        label: "资料卡");
+    user.ProfileId = newProfileId;
+}
 
 // changes 形态（前台可读）
 // "removed": [{ "id":"…", "name":"访客" }]
@@ -459,18 +483,41 @@ user.WithAudit(builder)
 
 ## 主键：ULID 与实体基类
 
-约定使用 `Ulid` 作为实体主键类型（Crockford Base32，26 字符；库中一般为 `char(26)` / `varchar(26)`，列名 `id`）。
+约定使用 `Ulid` 作为实体主键类型（Crockford Base32，26 字符；组件映射为 `varchar(26)`，列名 `id`）。
 
-推荐表实体继承 `DatabaseEntity`（仅含 `Id`，不带审计/软删字段），并用 lambda 链式赋值：
+| 基类 | 列 | 适用 |
+|------|-----|------|
+| [`DatabaseEntity`](DuMes.Component.Database/Entities/DatabaseEntity.cs) | `id` | 仅需主键的轻量实体 |
+| [`DatabaseRecordEntity`](DuMes.Component.Database/Entities/DatabaseRecordEntity.cs) | + `creator_id` / `creation_time`（`IsOnlyIgnoreUpdate`） | record / log / 审计等只追加表 |
+| [`DatabaseBusinessEntity`](DuMes.Component.Database/Entities/DatabaseBusinessEntity.cs) | + `modifier_id` / `modify_time` / `delete_time` / `sort` | 可改可软删的业务主数据表 |
+
+继承链：`DatabaseEntity` → `DatabaseRecordEntity` → `DatabaseBusinessEntity`。`DatabaseAuditRecord` 继承 `DatabaseRecordEntity`（审计行只追加）。
+
+软删约定：`delete_time IS NULL` = 未删除；有时间 = 已删除（值为删除时刻）。未删查询：`.Where(x => x.DeleteTime == null)`（或内存侧 `!x.IsDeleted`，`IsDeleted` 为忽略列）。
+
+推荐表实体继承基类，并用链式赋值：
 
 ```csharp
 using DuMes.Component.Database.Entities;
 
+// 业务表
 var row = new Product()
     .NewId()
-    .Set(x => x.Name, "widget")
-    .Set(x => x.CreateTime, DateTime.Now);
+    .By(userId)
+    .At()
+    .WithSort(10)
+    .Set(x => x.Name, "widget");
 await DbScoped.SugarScope.Insertable(row).ExecuteCommandAsync();
+
+row.Set(x => x.Name, "widget-v2").Touch(userId);
+await DbScoped.SugarScope.Updateable(row).ExecuteCommandAsync();
+
+row.SoftDelete(userId); // 写 delete_time；Updateable 落库
+await DbScoped.SugarScope.Updateable(row).ExecuteCommandAsync();
+
+// record / log 表
+var log = new OpLog().NewId().By(userId).At();
+await DbScoped.SugarScope.Insertable(log).ExecuteCommandAsync();
 ```
 
 仍可手写主键、不继承基类：
@@ -480,7 +527,7 @@ var row = new Product
 {
     Id = Ulid.NewUlid(),
     Name = "widget",
-    CreateTime = DateTime.Now
+    CreationTime = DateTime.Now
 };
 ```
 
@@ -491,7 +538,7 @@ var row = new Product
 3. **全局映射（Ulid）**：`EntityService` 为 `Ulid` / `Ulid?` 挂载 `UlidTypeConverter`（`varchar(26)`）；实体列不必写 `SqlParameterDbType`。
 4. **全局映射（枚举）**：`EntityService` 为枚举 / 可空枚举挂载 SqlSugar 自带 `EnumToStringConvert`，库中存枚举**名称**（如 `OnSale`），非数值；列上已显式指定 `SqlParameterDbType` 时不覆盖。
 5. **可空值类型**：业务上「可无」的外键可用 `Ulid?`；主键仍写 `Ulid`，插入前必须赋值。
-6. **基类范围**：`DatabaseEntity` 只承载身份；`[SugarTable]` / `[CodeFirst]` / `[Tenant]` 与业务列由派生类声明。
+6. **基类范围**：`DatabaseEntity` 身份；`DatabaseRecordEntity` 创建人/时间；`DatabaseBusinessEntity` 修改人/时间、软删时间、排序。`[SugarTable]` / `[CodeFirst]` / `[Tenant]` 与业务列由派生类声明。
 
 ## 使用
 
@@ -546,33 +593,36 @@ catch
 1. **`DbType` 可配，默认 PostgreSQL**：省略时按 `IocDbType.PostgreSQL`；改其它类型须补齐驱动包。
 2. **主键 ULID**：插入前 `.NewId()` 或 `Ulid.NewUlid()`；不要混用雪花 `long` 主键策略。推荐继承 `DatabaseEntity`。
 3. **先 Serilog 再 Database（强制）**：本组件已依赖 `DuMes.Component.Serilog`；宿主须 `UseComponentSerilog()`，否则 `LogDebug` / `Write*` 无法按约定输出。
-4. **ConfigId 唯一**：同一 `Connections`（含从库）内忽略大小写重复则启动失败。
+4. **ConfigId 唯一**：同一 `Connections`（含从库）内忽略大小写重复则启动失败。从库只做读写分离，勿把从库 ConfigId 用于 `[Tenant]` / `AuditConfigIds`。
 5. **密钥**：连接串勿提交真实密码；用 Development / Production 分文件 + Secrets。
-6. **时间**：审计字段写入 `DateTime.Now`（本地时；暂无异地部署）。
+6. **时间**：审计字段写入 `DateTime.Now`（本地时；暂无异地部署）。JSON 时间为 `yyyy-MM-dd HH:mm:ss`。
 7. **命名（PostgreSQL）**：库内表/列必须小写；组合词必须 `snake_case`（`xxx_xxx`）。写 `[SugarColumn]` 时 **`ColumnName` 必填**。
 8. **SQL 日志**：无 `EnableSqlDebugLog`；Development → `LogDebug` 进调试窗口；各环境慢 SQL / 错误用 `Write*` 落盘；Production 无全量 SQL。
-9. **自动建库 / 架构**：固定开启；建架构随 `DbType` 分支（不支持则跳过）。账户须有建库 / 建 schema 权限。
-10. **CodeFirst / Tenant**：扫描建表须 `[CodeFirst]` + `[SugarTable]` + `[Tenant]`（或 `[DatabaseGroup]`）；DbFirst 表不要标 `[CodeFirst]`。业务用 `QueryableWithAttr<T>()` 等切库。
-11. **PG 分区表**：`[DatabasePartition]` + `[DatabasePartitionField]`；主键含分区列。有数据时仍可对**父表**增删列（[官方分区说明](https://www.postgresql.org/docs/current/ddl-partitioning.html) / [ALTER TABLE](https://www.postgresql.org/docs/current/sql-altertable.html)），子分区自动对齐；勿在子分区上单独改列。分区键禁止删除。`[SugarIndex]` 建在父表；**UNIQUE 索引须包含分区键**（PG 约束）。
-12. **PG 继承表**：子实体须 C# 继承父实体并标 `[DatabaseInherit]`（勿与分区表混用）。子类只写本地列；查父表默认含子集（`ONLY parent` 可排除）。`[SugarIndex]` 不继承，父/子各自声明。见 [表继承](https://www.postgresql.org/docs/current/ddl-inherit.html)。
+9. **自动建库 / 架构**：固定开启（仅主库）；建架构随 `DbType` 分支（不支持则跳过）。账户须有建库 / 建 schema 权限。
+10. **CodeFirst / Tenant**：扫描建表须 `[CodeFirst]` + `[SugarTable]` + `[Tenant]`（或 `[DatabaseGroup]`）；DbFirst 表不要标 `[CodeFirst]`。可用 `GetEntityTypes` / `InitTables(groupName, …)`。业务用 `QueryableWithAttr<T>()` 等切库。
+11. **PG 分区表**：`[DatabasePartition(Grain)]` + `[DatabasePartitionField]`（`Year`/`Quarter`/`Month`/`Day`）；主键含分区列。窗口外子分区不会自动补建，长期服务请定期 `InitTables` 或自行扩窗。有数据时仍可对**父表**增删列（[官方分区说明](https://www.postgresql.org/docs/current/ddl-partitioning.html) / [ALTER TABLE](https://www.postgresql.org/docs/current/sql-altertable.html)），子分区自动对齐；勿在子分区上单独改列。分区键禁止删除。`[SugarIndex]` 建在父表；**UNIQUE 索引须包含分区键**（PG 约束）。
+12. **PG 继承表**：子实体须 C# 继承父实体并标 `[DatabaseInherit]`（勿与分区表混用）。子类只写本地列；子表 DDL 不单独建 PK。查父表默认含子集（`ONLY parent` 可排除）。`[SugarIndex]` / jsonb·向量索引特性不继承，父/子各自声明。见 [表继承](https://www.postgresql.org/docs/current/ddl-inherit.html)。
 13. **PG jsonb GIN**：`[DatabaseJsonbIndex]` 默认 `jsonb_path_ops`（`@>` 包含）；需 `?` 等键操作时用 `DatabaseJsonbIndexOps.Ops`。查询须用 jsonb 运算符才走索引。
-14. **PG 向量（pgvector）**：列标 `[DatabaseVector(n)]`；数据库须已支持 pgvector。近邻查询可用 SQL 运算符 `<->` / `<=>` / `<#>`。
+14. **PG 向量（pgvector）**：列标 `[DatabaseVector(n)]`；数据库须已支持 pgvector。非 PG 系标向量/坐标特性会在配置阶段失败。近邻查询可用 SQL 运算符 `<->` / `<=>` / `<#>`。
 15. **PG 坐标**：`[DatabaseCoordinate(2|3)]` + `DatabaseCoordinate`；落库 `vector(2|3)`。WMS 货位距离用 `DatabaseCoordinate.Distance` 或 SQL `<->`。
 16. **PG 向量索引**：`[DatabaseVectorIndex]` 默认 HNSW + L2；查询运算符须与 `Ops` 一致（L2=`<->`，Cosine=`<=>`，IP=`<#>`）。IVFFlat 适合已有数据后再建，并设合理 `Lists`。
 17. **SqlSugar 能力**：分表、仓储等以 [官方文档](https://www.donet5.com/Home/Doc) 为准；本组件负责注册、校验、AOP、建库/架构与 CodeFirst / 分区 / 继承 / jsonb·向量索引 / 向量 / 坐标封装。
-18. **字段审计**：`AuditConfigIds` 指定建表/写入连接；`WithAudit(b).SetName(前,后)`；`HasChanges` 空则不写库。
+18. **字段审计**：`AuditConfigIds` 指定建表/写入连接；`DatabaseAuditRecord` 继承 `DatabaseRecordEntity`（`creator_id` / `creation_time`）；组件用 `DatabaseAuditBuilder.Scalar/List/...`；`HasChanges` 空则不写库。`WithAudit.SetXxx` 为业务包装示例，见 `TestConsole`。
+19. **实体基类分层**：日志/审计继承 `DatabaseRecordEntity`（`.By` / `.At`）；业务主数据继承 `DatabaseBusinessEntity`（再加 `.Touch` / `.SoftDelete` / `.Restore` / `.WithSort`）；`delete_time` 空=未删、有值=已删。
 
 ## 引用
 
-项目引用或 NuGet 引用本组件即可。传递引入 `DuMes.Component.Serilog`、`SqlSugar.IOC`、`SqlSugarCoreNoDrive`、`Npgsql`、`Ulid`。
+项目引用或 NuGet 引用本组件即可。传递引入 `DuMes.Component.Serilog`、`SqlSugar.IOC`、`SqlSugarCoreNoDrive`、`Npgsql`、`Pgvector`、`Ulid`。
 
 宿主须配置 `builder.Host.UseComponentSerilog()`（见 [Serilog README](https://github.com/ameizei/DuMes.Component.Serilog)）。
 
 ```csharp
-using DuMes.Component.Database.Audit; // DatabaseAuditRecord / DatabaseAuditBuilder
+using DuMes.Component.Database.Audit; // DatabaseAuditRecord / DatabaseAuditBuilder / DatabaseAuditRef
+using DuMes.Component.Database.CodeFirst; // InitTables / GetEntityTypes / 分区·向量等特性
 using DuMes.Component.Database.DependencyInjection;
-using DuMes.Component.Database.Entities; // DatabaseEntity / NewId / Set
+using DuMes.Component.Database.Entities; // DatabaseEntity / Record / Business / NewId / Set / By / At / Touch / SoftDelete
 using DuMes.Component.Database.Options;
+using DuMes.Component.Database.Serialization; // DatabaseJsonOptions（可选复用）
 using DuMes.Component.Serilog; // Write*
 using SqlSugar.IOC; // DbScoped
 ```

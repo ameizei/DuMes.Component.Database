@@ -69,7 +69,7 @@ internal static class AuditScenario
         };
 
         var builder = DatabaseAuditBuilder.For(nameof(DemoProduct), fromDb.Id, "Update")
-            .By(Ulid.NewUlid(), "李四");
+            .By(Ulid.NewUlid());
 
         fromDb.WithAudit(builder)
             .SetName(fromDb.Name, "widget-audit-v2")
@@ -97,8 +97,8 @@ internal static class AuditScenario
             .Where(x => x.Id == audit.Id)
             .FirstAsync();
         logger.LogInformation(
-            "[Audit] 统一表回读 EntityId={EntityId} User={User} Changes={Count}",
-            loaded.EntityId, loaded.CreateUserName, loaded.Changes?.Count ?? 0);
+            "[Audit] 统一表回读 EntityId={EntityId} CreatorId={CreatorId} Changes={Count}",
+            loaded.EntityId, loaded.CreatorId, loaded.Changes?.Count ?? 0);
 
         var json = JsonSerializer.Serialize(loaded, DatabaseJsonOptions.JsonStringOptions);
         logger.LogInformation("[Audit] JSON={Json}", json);
@@ -127,7 +127,7 @@ internal static class AuditScenario
 
         var fromDb = await systemDb.Queryable<DemoProduct>().InSingleAsync(product.Id);
         var builder = DatabaseAuditBuilder.For(nameof(DemoProduct), fromDb.Id, "Update")
-            .By(Ulid.NewUlid(), "李四");
+            .By(Ulid.NewUlid());
 
         fromDb.WithAudit(builder)
             .SetName(fromDb.Name, fromDb.Name)
@@ -167,7 +167,7 @@ internal static class AuditScenario
 
         var fromDb = await systemDb.Queryable<DemoStation>().InSingleAsync(station.Id);
         var builder = DatabaseAuditBuilder.For(nameof(DemoStation), fromDb.Id, "Update")
-            .By(Ulid.NewUlid(), "王五");
+            .By(Ulid.NewUlid());
 
         // 1) 工站自身字段
         fromDb.WithAudit(builder)
@@ -216,7 +216,7 @@ internal static class AuditScenario
 
         var mitsuDb = await systemDb.Queryable<DemoStation>().InSingleAsync(mitsuStation.Id);
         var mitsuBuilder = DatabaseAuditBuilder.For(nameof(DemoStation), mitsuDb.Id, "Update")
-            .By(Ulid.NewUlid(), "王五");
+            .By(Ulid.NewUlid());
         var mitsuPlc = (MitsubishiPlcConfig)mitsuDb.GetPlcConfig();
         mitsuPlc.WithAudit(mitsuBuilder)
             .SetName(mitsuPlc.Name, "R08")
@@ -282,7 +282,7 @@ internal static class AuditScenario
         var fromDb = await systemDb.Queryable<DemoUser>().InSingleAsync(user.Id);
 
         var builderShrink = DatabaseAuditBuilder.For(nameof(DemoUser), fromDb.Id, "Update")
-            .By(Ulid.NewUlid(), "管理员");
+            .By(Ulid.NewUlid());
         fromDb.WithAudit(builderShrink)
             .SetRoleIds(fromDb.RoleIds, [roleA, roleB], RoleName)
             .SetProfileId(fromDb.ProfileId, profileNew, ProfileName);
@@ -309,7 +309,7 @@ internal static class AuditScenario
         // 更换：去掉操作员、加上审计员（快照名称给前台直接展示）
         fromDb = await systemDb.Queryable<DemoUser>().InSingleAsync(user.Id);
         var builderReplace = DatabaseAuditBuilder.For(nameof(DemoUser), fromDb.Id, "Update")
-            .By(Ulid.NewUlid(), "管理员");
+            .By(Ulid.NewUlid());
         fromDb.WithAudit(builderReplace)
             .SetRoleIds(fromDb.RoleIds, [roleA, roleD], RoleName);
 

@@ -11,7 +11,7 @@ namespace DuMes.Component.Database.Audit;
 /// <example>
 /// <code>
 /// var audit = DatabaseAuditBuilder.For&lt;DatabaseAuditRecord&gt;("Station", stationId, "Update")
-///     .By(userId, "张三")
+///     .By(userId)
 ///     .Scalar("Name", "ST-01", "ST-02", label: "工站名称")
 ///     .Nested("PLC.Name", "S7", "NJ", label: "PLC名称")
 ///     .List("LoginMethods", new[] { "Web", "Mobile" }, new[] { "Web", "Api" }, label: "登录方式")
@@ -27,33 +27,31 @@ public sealed class DatabaseAuditBuilder<TRecord> where TRecord : DatabaseAuditR
         _record = record;
     }
 
-    /// <summary>新建审计记录（已 <c>NewId</c>，<c>CreateTime = DateTime.Now</c>）。</summary>
+    /// <summary>新建审计记录（已 <c>NewId</c>，<c>CreationTime = DateTime.Now</c>）。</summary>
     public static DatabaseAuditBuilder<TRecord> For(string entityName, Ulid entityId, string action)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(entityName);
         ArgumentException.ThrowIfNullOrWhiteSpace(action);
 
-        var record = new TRecord().NewId();
+        var record = new TRecord().NewId().At();
         record.EntityName = entityName.Trim();
         record.EntityId = entityId;
         record.Action = action.Trim();
-        record.CreateTime = DateTime.Now;
         record.Changes = [];
         return new DatabaseAuditBuilder<TRecord>(record);
     }
 
     /// <summary>操作人。</summary>
-    public DatabaseAuditBuilder<TRecord> By(Ulid? createUserId, string createUserName)
+    public DatabaseAuditBuilder<TRecord> By(Ulid? creatorId)
     {
-        _record.CreateUserId = createUserId;
-        _record.CreateUserName = createUserName;
+        _record.By(creatorId);
         return this;
     }
 
     /// <summary>覆盖操作时间（默认已是 <c>DateTime.Now</c>）。</summary>
-    public DatabaseAuditBuilder<TRecord> At(DateTime createTime)
+    public DatabaseAuditBuilder<TRecord> At(DateTime creationTime)
     {
-        _record.CreateTime = createTime;
+        _record.At(creationTime);
         return this;
     }
 
