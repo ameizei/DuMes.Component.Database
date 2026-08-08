@@ -21,9 +21,6 @@ public sealed class DatabaseConnectionOptions
     /// </summary>
     public IocDbType? DbType { get; set; }
 
-    /// <summary>是否自动关闭连接。默认 <c>true</c>。</summary>
-    public bool IsAutoCloseConnection { get; set; } = true;
-
     /// <summary>
     ///     读写分离从库列表（仅主库项有效）。项须含 <see cref="ConfigId" /> 与 <see cref="ConnectionString" />。
     /// </summary>

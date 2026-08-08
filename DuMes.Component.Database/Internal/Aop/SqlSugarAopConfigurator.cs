@@ -27,7 +27,7 @@ internal static class SqlSugarAopConfigurator
             var client = db.GetConnection(configId);
             ApplySerializeService(client);
             ApplyTypeMappings(client);
-            ApplyMoreSettings(client, options, connection);
+            ApplyMoreSettings(client, connection);
             BindAop(client, options, configId);
         }
     }
@@ -80,19 +80,35 @@ internal static class SqlSugarAopConfigurator
         };
     }
 
-    private static void ApplyMoreSettings(ISqlSugarClient client, DatabaseComponentOptions options, DatabaseConnectionOptions connection)
+    private static void ApplyMoreSettings(ISqlSugarClient client, DatabaseConnectionOptions connection)
     {
         var dbType = DatabaseComponentOptions.ResolveDbType(connection);
         if (dbType != IocDbType.PostgreSQL)
             return;
 
         client.CurrentConnectionConfig.MoreSettings ??= new ConnMoreSettings();
-        client.CurrentConnectionConfig.MoreSettings.PgSqlIsAutoToLower = options.PgSqlIsAutoToLower;
-        client.CurrentConnectionConfig.MoreSettings.PgSqlIsAutoToLowerCodeFirst = options.PgSqlIsAutoToLower;
+        // 固定开启：与「库内全小写」约定一致，不开放配置
+        client.CurrentConnectionConfig.MoreSettings.PgSqlIsAutoToLower = true;
+        client.CurrentConnectionConfig.MoreSettings.PgSqlIsAutoToLowerCodeFirst = true;
     }
 
     private static void BindAop(ISqlSugarClient client, DatabaseComponentOptions options, string configId)
     {
+        // InsertNav / UpdateNav 等可能绕过 ISugarDataConverter，参数值仍是 Ulid；执行前转为字符串
+        client.Aop.OnExecutingChangeSql = (sql, parameters) =>
+        {
+            if (parameters != null)
+            {
+                foreach (var parameter in parameters)
+                {
+                    if (parameter.Value is Ulid ulid)
+                        parameter.Value = ulid.ToString();
+                }
+            }
+
+            return new KeyValuePair<string, SugarParameter[]>(sql, parameters);
+        };
+
         client.Aop.OnLogExecuting = (sql, parameters) =>
         {
             var logger = DatabaseSqlLogger.Logger;

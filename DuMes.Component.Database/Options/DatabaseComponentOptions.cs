@@ -20,11 +20,6 @@ public sealed class DatabaseComponentOptions
     /// </summary>
     public double SlowSqlSeconds { get; set; } = 1;
 
-    /// <summary>
-    ///     PostgreSQL 时是否自动将表/列名转小写（<c>PgSqlIsAutoToLower</c> / CodeFirst）。默认 <c>true</c>。
-    /// </summary>
-    public bool PgSqlIsAutoToLower { get; set; } = true;
-
     /// <summary>校验配置；失败抛出 <see cref="InvalidOperationException" />。</summary>
     public void Validate()
     {

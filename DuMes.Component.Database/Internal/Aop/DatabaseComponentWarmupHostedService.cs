@@ -1,19 +1,38 @@
+using DuMes.Component.Database.Options;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using SqlSugar;
 
 namespace DuMes.Component.Database.Internal.Aop;
 
 /// <summary>
-///     宿主启动时注入 SQL AOP 所用 <see cref="ILogger" />（控制台 Host / Web / Windows Service）。
+///     宿主启动时：注入 SQL AOP 所用 <see cref="ILogger" />，并自动建库 / 架构。
+///     CodeFirst 请业务侧调用 <c>DatabaseCodeFirst.InitTables(assembly)</c>。
 /// </summary>
 internal sealed class DatabaseComponentWarmupHostedService : IHostedService
 {
-    public DatabaseComponentWarmupHostedService(ILoggerFactory loggerFactory)
+    private readonly DatabaseComponentOptions _options;
+    private readonly ILogger _logger;
+
+    public DatabaseComponentWarmupHostedService(
+        DatabaseComponentOptions options,
+        ISqlSugarClient sugarClient,
+        ILoggerFactory loggerFactory)
     {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(sugarClient);
+        ArgumentNullException.ThrowIfNull(loggerFactory);
+
+        _options = options;
         DatabaseSqlLogger.Initialize(loggerFactory);
+        _logger = loggerFactory.CreateLogger("DuMes.Component.Database.Bootstrap");
     }
 
-    public Task StartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+    public Task StartAsync(CancellationToken cancellationToken)
+    {
+        DatabaseBootstrapper.EnsureCreated(_options, _logger);
+        return Task.CompletedTask;
+    }
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 }

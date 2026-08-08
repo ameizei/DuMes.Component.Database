@@ -88,7 +88,7 @@ public static class DatabaseServiceCollectionExtensions
                 ConfigId = connection.ConfigId.Trim(),
                 ConnectionString = connection.ConnectionString,
                 DbType = masterDbType,
-                IsAutoCloseConnection = connection.IsAutoCloseConnection
+                IsAutoCloseConnection = true
             };
 
             if (connection.Slaves is { Count: > 0 })
@@ -98,7 +98,7 @@ public static class DatabaseServiceCollectionExtensions
                     ConfigId = slave.ConfigId.Trim(),
                     ConnectionString = slave.ConnectionString,
                     DbType = DatabaseComponentOptions.ResolveSlaveDbType(connection, slave),
-                    IsAutoCloseConnection = slave.IsAutoCloseConnection
+                    IsAutoCloseConnection = true
                 }).ToList();
             }
 

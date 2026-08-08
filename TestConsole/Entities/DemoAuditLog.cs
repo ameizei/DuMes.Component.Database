@@ -1,3 +1,4 @@
+using DuMes.Component.Database.CodeFirst;
 using SqlSugar;
 
 namespace TestConsole.Entities;
@@ -6,6 +7,7 @@ namespace TestConsole.Entities;
 ///     演示审计实体（落在 ConfigId=<c>demo</c> / searchpath=demo）。
 /// </summary>
 [SugarTable("demo_audit_log")]
+[DatabaseGroup("demo")]
 public class DemoAuditLog
 {
     [SugarColumn(IsPrimaryKey = true, ColumnName = "id", Length = 26)]

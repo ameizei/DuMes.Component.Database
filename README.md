@@ -10,10 +10,11 @@
 DuMes.Component.Database/
 ├── DependencyInjection/     # AddComponentDatabase
 ├── Options/                 # DatabaseComponentOptions、DatabaseConnectionOptions
+├── CodeFirst/               # GetEntityTypes(Assembly) → Type[]、InitTables
 ├── Serialization/           # System.Text.Json（IsJson / ISerializeService）
 ├── Converters/              # UlidTypeConverter（表列 EntityService）
 └── Internal/
-    └── Aop/                 # 映射 / 序列化挂载 / SQL AOP
+    └── Aop/                 # 映射 / 序列化 / SQL AOP / 启动建库与架构 / CodeFirst
 ```
 
 ## 分工
@@ -73,6 +74,9 @@ builder.Services.AddComponentDatabase(o =>
 |------|------|
 | SqlSugar.IOC 多库注册 | 每条 `Connections` → 一个 `IocConfig`（`DbType` 可配，默认 PostgreSQL） |
 | `DbScoped.SugarScope` / `ISqlSugarClient` | 业务侧查询、事务入口 |
+| 启动建库 / 架构 | `IHostedService`：`CreateDatabase` + PG `searchpath` schema（固定开启） |
+| CodeFirst | 实体标 `[DatabaseGroup("configId")]`；业务侧调用 `DatabaseCodeFirst.InitTables(assembly)` 按组建表 |
+| 自动关连接 | 注册时固定 `IsAutoCloseConnection=true`；特殊场景可在业务侧自建 `SqlSugarClient` |
 | AOP | 经 `ILogger` + Serilog：`LogDebug` / `WriteWarning` / `WriteError`（见「组件内置行为」） |
 
 主键由业务在插入前赋值：`entity.Id = Ulid.NewUlid()`（不依赖雪花 `DatacenterId` / `WorkId`）。
@@ -85,7 +89,6 @@ builder.Services.AddComponentDatabase(o =>
 |--------|------|--------|------|------|
 | `Connections` | array | — | 是 | 至少一个连接；见下表 |
 | `SlowSqlSeconds` | double | `1` | 否 | 超过该秒数记慢 SQL；须 `> 0` |
-| `PgSqlIsAutoToLower` | bool | `true` | 否 | 自动将表/列名转小写（默认开启，与「库内全小写」约定一致） |
 
 #### `Connections[]`
 
@@ -94,7 +97,6 @@ builder.Services.AddComponentDatabase(o =>
 | `ConfigId` | string | — | 是 | 多库标识；同一列表内忽略大小写唯一 |
 | `ConnectionString` | string | — | 是 | 连接串（格式随 `DbType`）；空则启动报错 |
 | `DbType` | `IocDbType` | `PostgreSQL` | 否 | 数据库类型，见 [IocDbType](https://www.donet5.com/Doc/1/2247)；**当前默认 PostgreSQL**；从库未写时继承主库 |
-| `IsAutoCloseConnection` | bool | `true` | 否 | 是否自动关闭连接 |
 | `Slaves` | array | `[]` | 否 | 从库列表；项结构同连接（须有 `ConfigId` + `ConnectionString`） |
 
 ### 组件内置行为（不可配置项）
@@ -104,12 +106,15 @@ builder.Services.AddComponentDatabase(o =>
 | 行为 | 说明 |
 |------|------|
 | 配置校验 | 启动时 `Validate()`：节存在、连接非空、`ConfigId` 唯一、`DbType` 合法 |
+| 自动建库 / 架构 | 固定开启：`CreateDatabase()`；建架构按 `DbType` 选 SQL——PG 系（含人大金仓/OpenGauss 等）`CREATE SCHEMA IF NOT EXISTS`（读 `searchpath`）；SQL Server 查 `sys.schemas` 后建（架构名取 `ConfigId`）；MySQL / Sqlite / Oracle 等**不支持独立架构**则跳过。见 [库表管理](https://www.donet5.com/Home/Doc?typeId=1203) |
+| CodeFirst | 实体同时标 `[SugarTable]` + `[DatabaseGroup(GroupName)]`，`GroupName` = `ConfigId`。业务任意时机调用 `DatabaseCodeFirst.InitTables(assembly)`（不挂 DI 注册、不随 Warmup 自动执行）。见 [CodeFirst](https://www.donet5.com/Home/Doc?typeId=1206) |
+| `IsAutoCloseConnection` | 固定 `true`。若业务必须手动管连接，请在业务逻辑中单独 `new SqlSugarClient(...)` |
+| `PgSqlIsAutoToLower` | PostgreSQL 时固定 `true`（含 CodeFirst）；实体列须显式 `ColumnName`（见「命名约定」） |
 | 全量 SQL | `OnLogExecuting` → `ILogger.LogDebug`（赋值后 SQL）。**仅 Development** 会进**调试窗口**（Serilog：Development 最低 Debug；其它环境最低 Information，故 Production **不会**打全量 SQL） |
 | 慢 SQL | `OnLogExecuted`：耗时 ≥ `SlowSqlSeconds` → `WriteWarning("sql_slow", …)` → `logs/sql_slow.log`（各环境均落盘） |
 | SQL 错误 | `OnError` → `WriteError("sql_error", …)`（可带异常）→ `logs/sql_error.log`（含赋值后 SQL / 参数摘要，**不含连接串**；各环境均落盘） |
 | 与 MEL 区别 | `LogDebug` **不落盘**；只有 `WriteWarning` / `WriteError` 写文件（见 Serilog README） |
-| Pg 命名 | `DbType=PostgreSQL` 时默认开启 `PgSqlIsAutoToLower`；实体列须显式 `ColumnName`（见「命名约定」） |
-| Ulid 映射 | `EntityService` 全局挂载 `UlidTypeConverter` → `varchar(26)`（仅**表列**） |
+| Ulid 映射 | `EntityService` 全局挂载 `UlidTypeConverter` → `varchar(26)`；`OnExecutingChangeSql` 将参数中的 `Ulid` 转字符串（覆盖 InsertNav 等绕过转换器的路径） |
 | 枚举映射 | `EntityService` 全局挂载 SqlSugar `EnumToStringConvert` → 库中存**枚举名**（仅**表列**） |
 | IsJson | 表列 `IsJson=true` + `ColumnDataType=jsonb`；经 `DatabaseSerializeService`（System.Text.Json）序列化：驼峰、枚举名、Ulid 字符串 |
 | 环境 | 全量 SQL（`LogDebug`） | 慢 SQL / 错误（`Write*`） |
@@ -128,9 +133,6 @@ builder.Services.AddComponentDatabase(o =>
     // 慢 SQL 阈值（秒）；超时与错误经 Write* 始终落盘（与环境无关）
     "SlowSqlSeconds": 1,
 
-    // 表/列名自动转小写（默认 true）
-    "PgSqlIsAutoToLower": true,
-
     "Connections": [
       {
         // 多库标识；业务 GetConnection("main")
@@ -139,10 +141,8 @@ builder.Services.AddComponentDatabase(o =>
         // 数据库类型（IocDbType）；可省略，默认 PostgreSQL
         "DbType": "PostgreSQL",
 
-        // 连接串（可用 User Secrets / 环境变量覆盖）
+        // 连接串（可用 User Secrets / 环境变量覆盖）；PG 多架构可写 searchpath=system
         "ConnectionString": "Host=127.0.0.1;Port=5432;Database=dumes;Username=postgres;Password=your-password",
-
-        "IsAutoCloseConnection": true,
 
         // 读写分离从库（可选）
         "Slaves": [
@@ -180,12 +180,26 @@ builder.Services.AddComponentDatabase(o =>
 });
 ```
 
-也可在配置基础上再覆盖：
+CodeFirst（实体特性 + 业务侧调用）：
 
 ```csharp
-builder.Services.AddComponentDatabase(
-    builder.Configuration,
-    configureOptions: o => o.SlowSqlSeconds = 2);
+using DuMes.Component.Database.CodeFirst;
+using SqlSugar;
+
+[SugarTable("product")]
+[DatabaseGroup("main")] // GroupName = ConfigId
+public class Product { /* ... */ }
+
+[SugarTable("audit_log")]
+[DatabaseGroup("demo")]
+public class AuditLog { /* ... */ }
+
+// 宿主启动后、任意入口调用（按 GroupName 路由到对应库）
+var map = DatabaseCodeFirst.InitTables(typeof(Product).Assembly);
+// 或只建某一组：
+DatabaseCodeFirst.InitTables("main", typeof(Product).Assembly);
+// 仅扫描：
+Type[] types = DatabaseCodeFirst.GetEntityTypes(typeof(Product).Assembly, "main");
 ```
 
 ## 命名约定（强制）
@@ -201,9 +215,11 @@ builder.Services.AddComponentDatabase(
 写实体时：**每个映射列的 `[SugarColumn]` 都必须写 `ColumnName`**，且值符合上表（小写；组合词 `xxx_xxx`）。不要依赖属性名推断列名。`PgSqlIsAutoToLower` / CodeFirst 转小写是辅助；`CreateTime` 不会自动变成 `create_time`。
 
 ```csharp
+using DuMes.Component.Database.CodeFirst;
 using SqlSugar;
 
 [SugarTable("product")]
+[DatabaseGroup("main")]
 public class Product
 {
     [SugarColumn(IsPrimaryKey = true, ColumnName = "id", Length = 26)]
@@ -309,7 +325,9 @@ catch
 6. **时间**：审计字段写入 `DateTime.Now`（本地时；暂无异地部署）。
 7. **命名（PostgreSQL）**：库内表/列必须小写；组合词必须 `snake_case`（`xxx_xxx`）。写 `[SugarColumn]` 时 **`ColumnName` 必填**。
 8. **SQL 日志**：无 `EnableSqlDebugLog`；Development → `LogDebug` 进调试窗口；各环境慢 SQL / 错误用 `Write*` 落盘；Production 无全量 SQL。
-9. **SqlSugar 能力**：CodeFirst、分表、仓储等以 [官方文档](https://www.donet5.com/Home/Doc) 为准；本组件负责注册、校验与 AOP。
+9. **自动建库 / 架构**：固定开启；建架构随 `DbType` 分支（不支持则跳过）。账户须有建库 / 建 schema 权限。
+10. **CodeFirst**：实体标 `[DatabaseGroup("configId")]`，业务调用 `DatabaseCodeFirst.InitTables(assembly)`；勿在 `AddComponentDatabase` 里写死扫描。
+11. **SqlSugar 能力**：分表、仓储等以 [官方文档](https://www.donet5.com/Home/Doc) 为准；本组件负责注册、校验、AOP、建库/架构与 CodeFirst 封装。
 
 ## 引用
 
@@ -328,7 +346,7 @@ using SqlSugar.IOC; // DbScoped
 
 | 工程 | 说明 |
 |------|------|
-| `TestConsole` | 控制台：多架构 ConfigId（`system` / `demo`）导航、增删改查、分页、多库事务、ULID |
+| `TestConsole` | 控制台场景分类：`Crud`（增删改查/IsJson）、`MultiDb`（`GetConnection`）、`Navigate`（`InsertNav`/`Includes`/`UpdateNav`/`DeleteNav`） |
 | `TestWebApi` | （待补）WebAPI：演示 CRUD 与多库 |
 | `TestWorkerService` | （待补）Worker：后台任务写库 |
 
