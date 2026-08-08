@@ -20,6 +20,35 @@ public sealed class DatabaseComponentOptions
     /// </summary>
     public double SlowSqlSeconds { get; set; } = 1;
 
+    /// <summary>
+    ///     统一审计表 <c>log_audit</c> 建在哪些 <c>ConfigId</c> 上（可多个）。
+    ///     省略或空：默认仅 <see cref="Connections"/> 第一项。
+    ///     SaaS 建议显式指定审计库，如 <c>["record"]</c>；PG 多架构可用 <c>main</c>/<c>system</c>/<c>record</c> 等；
+    ///     不支持独立架构时则为独立数据库连接的 ConfigId。
+    /// </summary>
+    public List<string> AuditConfigIds { get; set; } = [];
+
+    /// <summary>
+    ///     解析实际建审计表的 ConfigId 列表（已 Trim、去重；空配置时回落第一连接）。
+    /// </summary>
+    public IReadOnlyList<string> ResolveAuditConfigIds()
+    {
+        var fromConfig = (AuditConfigIds ?? [])
+            .Where(static x => !string.IsNullOrWhiteSpace(x))
+            .Select(static x => x.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (fromConfig.Count > 0)
+            return fromConfig;
+
+        var first = Connections?.FirstOrDefault(static c => c != null && !string.IsNullOrWhiteSpace(c.ConfigId));
+        if (first == null)
+            return [];
+
+        return [first.ConfigId.Trim()];
+    }
+
     /// <summary>校验配置；失败抛出 <see cref="InvalidOperationException" />。</summary>
     public void Validate()
     {
@@ -42,6 +71,26 @@ public sealed class DatabaseComponentOptions
 
             for (var s = 0; s < slaves.Count; s++)
                 ValidateConnection(slaves[s], $"{path}:{nameof(DatabaseConnectionOptions.Slaves)}[{s}]", configIds, isSlave: true);
+        }
+
+        // 主库 ConfigId（不含从库）：审计表应落在可写主连接上
+        var masterIds = new HashSet<string>(
+            Connections
+                .Where(static c => c != null && !string.IsNullOrWhiteSpace(c.ConfigId))
+                .Select(static c => c.ConfigId.Trim()),
+            StringComparer.OrdinalIgnoreCase);
+
+        var auditIds = (AuditConfigIds ?? [])
+            .Where(static x => !string.IsNullOrWhiteSpace(x))
+            .Select(static x => x.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        foreach (var id in auditIds)
+        {
+            if (!masterIds.Contains(id))
+                throw new InvalidOperationException(
+                    $"配置无效：{SectionName}:{nameof(AuditConfigIds)} 含未知 ConfigId「{id}」，须为 {nameof(Connections)} 中的主库标识（不能是从库）。");
         }
     }
 

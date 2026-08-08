@@ -1,3 +1,4 @@
+using DuMes.Component.Database.Audit;
 using DuMes.Component.Database.CodeFirst;
 using DuMes.Component.Database.Entities;
 using SqlSugar;
@@ -5,7 +6,7 @@ using SqlSugar;
 namespace TestConsole.Entities.Crud;
 
 /// <summary>
-///     演示实体（落在 ConfigId=<c>system</c> / searchpath=system）。
+///     演示实体。变更用链式 <c>WithAudit(builder).SetName(前,后).SetTags(前,后)</c>。
 /// </summary>
 [SugarTable("demo_product")]
 [CodeFirst]
@@ -18,15 +19,12 @@ public class DemoProduct : DatabaseEntity
     [SugarColumn(ColumnName = "price", DecimalDigits = 2, Length = 18)]
     public decimal Price { get; set; }
 
-    /// <summary>枚举由组件全局映射为 varchar 枚举名，无需写 SqlParameterDbType。</summary>
     [SugarColumn(ColumnName = "status", Length = 32)]
     public DemoProductStatus Status { get; set; }
 
-    /// <summary>嵌套对象 → jsonb。</summary>
     [SugarColumn(ColumnName = "detail", IsJson = true, IsNullable = true, ColumnDataType = "jsonb")]
     public DemoProductDetail Detail { get; set; }
 
-    /// <summary>嵌套 List → jsonb。</summary>
     [SugarColumn(ColumnName = "tags", IsJson = true, IsNullable = true, ColumnDataType = "jsonb")]
     public List<DemoProductTag> Tags { get; set; }
 
@@ -38,4 +36,109 @@ public class DemoProduct : DatabaseEntity
 
     [SugarColumn(ColumnName = "is_delete")]
     public bool IsDelete { get; set; }
+
+    /// <summary>
+    ///     挂上统一审计表 Builder：<c>WithAudit(b).SetName(前,后).SetTags(前,后)</c>。
+    /// </summary>
+    public AuditUpdate WithAudit(DatabaseAuditBuilder<DatabaseAuditRecord> audit) => new(this, audit);
+
+    /// <summary>DemoProduct 字段级审计链式更新。</summary>
+    public sealed class AuditUpdate
+    {
+        private readonly DemoProduct _entity;
+        private readonly DatabaseAuditBuilder<DatabaseAuditRecord> _audit;
+
+        internal AuditUpdate(DemoProduct entity, DatabaseAuditBuilder<DatabaseAuditRecord> audit)
+        {
+            _entity = entity;
+            _audit = audit;
+        }
+
+        public AuditUpdate SetName(string before, string after)
+        {
+            if (before != after)
+            {
+                _audit.Scalar("Name", before, after, label: "名称");
+                _entity.Name = after;
+            }
+
+            return this;
+        }
+
+        public AuditUpdate SetPrice(decimal before, decimal after)
+        {
+            if (before != after)
+            {
+                _audit.Scalar("Price", before, after, label: "价格");
+                _entity.Price = after;
+            }
+
+            return this;
+        }
+
+        public AuditUpdate SetStatus(DemoProductStatus before, DemoProductStatus after)
+        {
+            if (before != after)
+            {
+                _audit.Scalar("Status", before, after, label: "状态");
+                _entity.Status = after;
+            }
+
+            return this;
+        }
+
+        public AuditUpdate SetDetailSku(string before, string after)
+        {
+            if (before != after)
+            {
+                _audit.Nested("Detail.Sku", before, after, label: "SKU");
+                _entity.Detail ??= new DemoProductDetail();
+                _entity.Detail.Sku = after;
+            }
+
+            return this;
+        }
+
+        public AuditUpdate SetDetailPreferredStatus(DemoProductStatus before, DemoProductStatus after)
+        {
+            if (before != after)
+            {
+                _audit.Nested("Detail.PreferredStatus", before, after, label: "偏好状态");
+                _entity.Detail ??= new DemoProductDetail();
+                _entity.Detail.PreferredStatus = after;
+            }
+
+            return this;
+        }
+
+        /// <summary><c>SetTags([改前…], [改后…])</c></summary>
+        public AuditUpdate SetTags(List<DemoProductTag> before, List<DemoProductTag> after)
+        {
+            before ??= [];
+            after ??= [];
+            if (TagsEqual(before, after))
+                return this;
+
+            _audit.List("Tags", before, after, label: "标签");
+            _entity.Tags = after;
+            return this;
+        }
+    }
+
+    private static bool TagsEqual(List<DemoProductTag> a, List<DemoProductTag> b)
+    {
+        if (ReferenceEquals(a, b))
+            return true;
+        if (a == null || b == null || a.Count != b.Count)
+            return false;
+
+        for (var i = 0; i < a.Count; i++)
+        {
+            if (a[i].Code != b[i].Code || a[i].Label != b[i].Label || a[i].TagId != b[i].TagId
+                || a[i].RelatedStatus != b[i].RelatedStatus)
+                return false;
+        }
+
+        return true;
+    }
 }

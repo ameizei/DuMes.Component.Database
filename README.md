@@ -11,6 +11,7 @@ DuMes.Component.Database/
 ├── DependencyInjection/     # AddComponentDatabase
 ├── Options/                 # DatabaseComponentOptions、DatabaseConnectionOptions
 ├── Entities/                # DatabaseEntity 基类、NewId / Set 链式赋值
+├── Audit/                   # 统一表 log_audit（被改行 Id、改前改后、操作人/时间）
 ├── CodeFirst/               # [CodeFirst]/Tenant/Group/Partition/Inherit/Vector、GetEntityTypes、InitTables
 ├── Serialization/           # System.Text.Json（IsJson / ISerializeService）
 ├── Converters/              # Ulid / Vector 表列转换（EntityService）
@@ -92,6 +93,7 @@ builder.Services.AddComponentDatabase(o =>
 |--------|------|--------|------|------|
 | `Connections` | array | — | 是 | 至少一个连接；见下表 |
 | `SlowSqlSeconds` | double | `1` | 否 | 超过该秒数记慢 SQL；须 `> 0` |
+| `AuditConfigIds` | string[] | `[]` | 否 | 统一审计表 `log_audit` 建在哪些 **主库** `ConfigId` 上；空则默认第一连接。SaaS 建议如 `["record"]` |
 
 #### `Connections[]`
 
@@ -110,6 +112,7 @@ builder.Services.AddComponentDatabase(o =>
 |------|------|
 | 配置校验 | 启动时 `Validate()`：节存在、连接非空、`ConfigId` 唯一、`DbType` 合法 |
 | 自动建库 / 架构 | 固定开启：`CreateDatabase()`；建架构按 `DbType` 选 SQL——PG 系（含人大金仓/OpenGauss 等）`CREATE SCHEMA IF NOT EXISTS`（读 `searchpath`）；SQL Server 查 `sys.schemas` 后建（架构名取 `ConfigId`）；MySQL / Sqlite / Oracle 等**不支持独立架构**则跳过。见 [库表管理](https://www.donet5.com/Home/Doc?typeId=1203) |
+| 统一审计表 | Warmup 仅在 `AuditConfigIds`（默认第一连接）上建 `log_audit`；写入请 `GetConnection(auditConfigId)` |
 | CodeFirst | 扫描建表须同时具备：`[CodeFirst]`（非 DbFirst）+ `[SugarTable]` + `[Tenant("configId")]`（优先；兼容 `[DatabaseGroup]`）。无 `[CodeFirst]` 的表实体不参与 InitTables。`QueryableWithAttr` 仍只依赖 Tenant。见 [CodeFirst](https://www.donet5.com/Home/Doc?typeId=1206)、[多租户](https://www.donet5.com/Doc/1/2246) |
 | PG 分区表 | `[DatabasePartition]` + `[DatabasePartitionField]`；InitTables 建父表/`PARTITION BY RANGE`/子分区。**已存在时对比实体增删列**（有数据亦可：对父表 `ADD`/`DROP COLUMN` 级联子分区；分区键不可删；新增非空列带 DEFAULT）。非 SqlSugar SplitTable |
 | PG 继承表 | 子实体 C# 继承父实体并标 `[DatabaseInherit]`；InitTables 建父表后 `CREATE TABLE child (...) INHERITS (parent)`。子类只声明本地列；父列变更由父实体同步并传播到子表。与分区表互斥。见 [表继承](https://www.postgresql.org/docs/current/ddl-inherit.html) |
@@ -137,33 +140,28 @@ builder.Services.AddComponentDatabase(o =>
 ```jsonc
 {
   "Database": {
-    // 慢 SQL 阈值（秒）；超时与错误经 Write* 始终落盘（与环境无关）
     "SlowSqlSeconds": 1,
+
+    // 审计表落点（须为下方 Connections 的主库 ConfigId）
+    // SaaS / PG 多架构示例：main + system + record → 审计只建在 record
+    // 无独立架构时：两个物理库也写成两个 ConfigId，此处填审计库
+    "AuditConfigIds": [ "record" ],
 
     "Connections": [
       {
-        // 多库标识；业务 GetConnection("main")
         "ConfigId": "main",
-
-        // 数据库类型（IocDbType）；可省略，默认 PostgreSQL
         "DbType": "PostgreSQL",
-
-        // 连接串（可用 User Secrets / 环境变量覆盖）；PG 多架构可写 searchpath=system
-        "ConnectionString": "Host=127.0.0.1;Port=5432;Database=dumes;Username=postgres;Password=your-password",
-
-        // 读写分离从库（可选）
-        "Slaves": [
-          // {
-          //   "ConfigId": "main-slave-1",
-          //   "ConnectionString": "Host=127.0.0.2;Port=5432;Database=dumes;Username=postgres;Password=your-password"
-          // }
-        ]
+        "ConnectionString": "Host=127.0.0.1;Port=5432;Database=dumes;SearchPath=main;Username=postgres;Password=your-password"
+      },
+      {
+        "ConfigId": "system",
+        "ConnectionString": "Host=127.0.0.1;Port=5432;Database=dumes;SearchPath=system;Username=postgres;Password=your-password"
+      },
+      {
+        "ConfigId": "record",
+        "ConnectionString": "Host=127.0.0.1;Port=5432;Database=dumes;SearchPath=record;Username=postgres;Password=your-password"
+        // 无架构时改为独立库，例如 Database=dumes_record
       }
-      // 第二套库示例：
-      // ,{
-      //   "ConfigId": "log",
-      //   "ConnectionString": "Host=127.0.0.1;Port=5432;Database=dumes_log;Username=postgres;Password=your-password"
-      // }
     ]
   }
 }
@@ -175,13 +173,19 @@ builder.Services.AddComponentDatabase(o =>
 builder.Services.AddComponentDatabase(o =>
 {
     o.SlowSqlSeconds = 1;
+    o.AuditConfigIds = ["record"]; // 审计表只建在 record
     o.Connections =
     [
         new DatabaseConnectionOptions
         {
             ConfigId = "main",
-            DbType = IocDbType.PostgreSQL, // 可省略，默认 PostgreSQL
-            ConnectionString = "Host=127.0.0.1;Port=5432;Database=dumes;Username=postgres;Password=your-password"
+            DbType = IocDbType.PostgreSQL,
+            ConnectionString = "Host=127.0.0.1;Port=5432;Database=dumes;SearchPath=main;Username=postgres;Password=your-password"
+        },
+        new DatabaseConnectionOptions
+        {
+            ConfigId = "record",
+            ConnectionString = "Host=127.0.0.1;Port=5432;Database=dumes;SearchPath=record;Username=postgres;Password=your-password"
         }
     ];
 });
@@ -339,6 +343,96 @@ public Ulid Id { get; set; }
 
 手写 SQL / 迁移脚本同样遵守：`create table product (...);`，列用 `create_time` 而非 `"CreateTime"`。
 
+## 字段审计（统一表 `log_audit`）
+
+组件内置统一审计表实体 [`DatabaseAuditRecord`](DuMes.Component.Database/Audit/DatabaseAuditRecord.cs)。Warmup 按 **`AuditConfigIds`** 建表（默认第一连接；SaaS 请显式指向 `record` 等）。写入须用对应连接，例如 `GetConnection("record")`。
+
+| 列 | 说明 |
+|------|------|
+| `id` | 本条审计主键 |
+| `entity_name` / `entity_id` | 被修改的业务行（类型名 + 行 Id） |
+| `action` | `Create` / `Update` / `Delete` |
+| `create_user_id` / `create_user_name` / `create_time` | 操作人与时间 |
+| `changes` | jsonb：字段改前/改后列表 |
+
+`changes[].kind`：`Scalar` / `Nested` / `Image` / `Icon`（后两者供前台按图/图标展示）/ `List`（含 `added`/`removed`）。
+
+```csharp
+var fromDb = await db.Queryable<Product>().InSingleAsync(id);
+var builder = DatabaseAuditBuilder.For(nameof(Product), fromDb.Id, "Update")
+    .By(userId, userName);
+
+fromDb.WithAudit(builder)
+    .SetName(fromDb.Name, fromUi.Name)
+    .SetTags(fromDb.Tags, fromUi.Tags);
+
+if (!builder.HasChanges)
+    return; // 未改任何字段：不 Update、不插审计
+
+await db.Updateable(fromDb).ExecuteCommandAsync();
+
+// 审计写入 AuditConfigIds 对应连接（勿写到业务库）
+var auditDb = DbScoped.SugarScope.GetConnection("record");
+await auditDb.Insertable(builder.Build()).ExecuteCommandAsync();
+
+var logs = await auditDb.Queryable<DatabaseAuditRecord>()
+    .Where(x => x.EntityId == fromDb.Id)
+    .ToListAsync();
+```
+
+前台 JSON 形态示例（驼峰，与组件 `DatabaseJsonOptions` 一致）：
+
+```json
+{
+  "id": "...",
+  "entityName": "Station",
+  "entityId": "...",
+  "action": "Update",
+  "createUserId": "...",
+  "createUserName": "张三",
+  "createTime": "2026-08-08T21:00:00",
+  "changes": [
+    { "path": "Name", "label": "工站名称", "kind": "Scalar", "before": "ST-01", "after": "ST-02" },
+    { "path": "PLC.Name", "label": "PLC名称", "kind": "Nested", "before": "Siemens-S7", "after": "Omron-NJ" },
+    {
+      "path": "RoleIds",
+      "label": "角色",
+      "kind": "List",
+      "before": [
+        { "id": "…", "name": "管理员" },
+        { "id": "…", "name": "操作员" },
+        { "id": "…", "name": "访客" }
+      ],
+      "after": [
+        { "id": "…", "name": "管理员" },
+        { "id": "…", "name": "操作员" }
+      ],
+      "added": [],
+      "removed": [{ "id": "…", "name": "访客" }]
+    }
+  ]
+}
+```
+
+说明：
+
+1. 统一表，不必再为每个业务建审计子类；按 `entity_id` 查某行的全部变更历史。
+2. **不提供**整对象万能 Diff：实体链式 `SetName(前,后)` / `SetTags(前,后)`。
+3. `builder.HasChanges == false` → 直接成功，不写业务表、不写审计表。
+4. `JsonDocument` 多态配置：库列统一 `JsonDocument`，按品牌转实体后再 `SetXxx`（见 `DemoStation` / `SiemensPlcConfig`）。
+5. **多对多 / 外键只存 Id 时**：业务列仍只存 Id；**审计建议写时快照** `DatabaseAuditRef`（`id` + 当时 `name`，可选 `extra`）。前台直接展示，不必再查；角色改名/删除后历史仍正确。后期按 Id 反查只能看到「当前」名称，且可能已查不到。见 `DemoUser`。
+
+```csharp
+// 写审计时带上名称解析（查字典/缓存即可）
+user.WithAudit(builder)
+    .SetRoleIds(user.RoleIds, [roleA, roleB], id => roleNameMap[id])
+    .SetProfileId(user.ProfileId, newProfileId, id => profileNameMap[id.Value]);
+
+// changes 形态（前台可读）
+// "removed": [{ "id":"…", "name":"访客" }]
+// "after": { "id":"…", "name":"新资料卡" }
+```
+
 ## 主键：ULID 与实体基类
 
 约定使用 `Ulid` 作为实体主键类型（Crockford Base32，26 字符；库中一般为 `char(26)` / `varchar(26)`，列名 `id`）。
@@ -440,6 +534,7 @@ catch
 13. **PG 向量（pgvector）**：列标 `[DatabaseVector(n)]`；数据库须已支持 pgvector。近邻查询可用 SQL 运算符 `<->` / `<=>` / `<#>`。
 14. **PG 坐标**：`[DatabaseCoordinate(2|3)]` + `DatabaseCoordinate`；落库 `vector(2|3)`。WMS 货位距离用 `DatabaseCoordinate.Distance` 或 SQL `<->`。
 15. **SqlSugar 能力**：分表、仓储等以 [官方文档](https://www.donet5.com/Home/Doc) 为准；本组件负责注册、校验、AOP、建库/架构与 CodeFirst / 分区 / 继承 / 向量 / 坐标封装。
+16. **字段审计**：`AuditConfigIds` 指定建表/写入连接；`WithAudit(b).SetName(前,后)`；`HasChanges` 空则不写库。
 
 ## 引用
 
@@ -448,6 +543,7 @@ catch
 宿主须配置 `builder.Host.UseComponentSerilog()`（见 [Serilog README](https://github.com/ameizei/DuMes.Component.Serilog)）。
 
 ```csharp
+using DuMes.Component.Database.Audit; // DatabaseAuditRecord / DatabaseAuditBuilder
 using DuMes.Component.Database.DependencyInjection;
 using DuMes.Component.Database.Entities; // DatabaseEntity / NewId / Set
 using DuMes.Component.Database.Options;
@@ -459,7 +555,7 @@ using SqlSugar.IOC; // DbScoped
 
 | 工程 | 说明 |
 |------|------|
-| `TestConsole` | 场景：`Crud` / `MultiDb` / `Navigate` / `Partition` / `Inherit` / `Vector` / `Coordinate` |
+| `TestConsole` | 场景：`Crud` / `MultiDb` / `Navigate` / `Partition` / `Inherit` / `Vector` / `Coordinate` / `Audit` |
 | `TestWebApi` | （待补）WebAPI：演示 CRUD 与多库 |
 | `TestWorkerService` | （待补）Worker：后台任务写库 |
 
