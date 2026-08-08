@@ -503,7 +503,15 @@ if (user.ProfileId != newProfileId)
 | `sort` | `[DatabaseAuditField(DatabaseAuditFieldNames.Sort)]` → `label: "Sort"` | 是——`.ChangeSort(前, 后, audit)` |
 | 业务自定义列 | `[DatabaseAuditField("Name")]` 等稳定键 | 是——`builder.Scalar(..., label: 键)`；前台按 `label` 做 I18N |
 
-软删：`delete_time IS NULL` = 未删除；有值 = 已删除。查询：`.Where(x => x.DeleteTime == null)`。
+软删：`delete_time IS NULL` = 未删除；有值 = 已删除。单表 SqlSugar 链式：`.NotDeleted()`（[`DatabaseBusinessSugarExtensions`](DuMes.Component.Database/Entities/DatabaseBusinessSugarExtensions.cs)，等价 `DeleteTime == null`），可用于 `Queryable` / `Updateable` / `Deleteable`。
+
+**多表 Join 限制**：`.NotDeleted()` 只挂在单表 `ISugarQueryable<T>`（及单表 `Updateable` / `Deleteable`）上。`LeftJoin` / `RightJoin` 后类型变为 `ISugarQueryable<T,T2,…>`，`Where` 须 `(a, b) => …`，**不能再链式 `.NotDeleted()`**。
+
+| 场景 | 写法 |
+|------|------|
+| 单表 | `Queryable<A>().NotDeleted()` |
+| Join 且只需主表未删 | **先** `.NotDeleted()` **再** Join：`Queryable<A>().NotDeleted().LeftJoin<B>(…)` |
+| Join 后按别名过滤 | 手写：`.Where((a, b) => a.DeleteTime == null)`；从表也要未删则 `&& b.DeleteTime == null` |
 
 ```csharp
 using DuMes.Component.Database.Audit;
@@ -512,10 +520,20 @@ using DuMes.Component.Database.Entities;
 var row = new Product().NewId().By(userId).At().WithSort(10).Set(x => x.Name, "widget");
 await DbScoped.SugarScope.Insertable(row).ExecuteCommandAsync();
 
+var list = await DbScoped.SugarScope.Queryable<Product>().NotDeleted().ToListAsync();
+await DbScoped.SugarScope.Updateable(row).NotDeleted().ExecuteCommandAsync();
+
+// Join：先滤主表，或 Join 后手写别名条件
+var joined = await DbScoped.SugarScope.Queryable<Product>()
+    .NotDeleted()
+    .LeftJoin<ProductTag>((p, t) => p.Id == t.ProductId)
+    .Where((p, t) => t.DeleteTime == null) // 从表若也是 BusinessEntity
+    .ToListAsync();
+
 var audit = DatabaseAuditBuilder.For(nameof(Product), row.Id, "Update").By(userId);
 row.ChangeSort(10, 20, audit);           // Sort → changes
 row.Set(x => x.Name, "widget-v2").Touch(userId); // Touch 不进 changes
-await DbScoped.SugarScope.Updateable(row).ExecuteCommandAsync();
+await DbScoped.SugarScope.Updateable(row).NotDeleted().ExecuteCommandAsync();
 await auditDb.Insertable(audit.Build()).ExecuteCommandAsync();
 
 row.SoftDelete(userId); // 不进 changes；另建 For(..., "Delete") 审计行即可
@@ -599,7 +617,7 @@ catch
 16. **PG 向量索引**：`[DatabaseVectorIndex]` 默认 HNSW + L2；查询运算符须与 `Ops` 一致（L2=`<->`，Cosine=`<=>`，IP=`<#>`）。IVFFlat 适合已有数据后再建，并设合理 `Lists`。
 17. **SqlSugar 能力**：分表、仓储等以 [官方文档](https://www.donet5.com/Home/Doc) 为准；本组件负责注册、校验、AOP、建库/架构与 CodeFirst / 分区 / 继承 / jsonb·向量索引 / 向量 / 坐标封装。
 18. **字段审计**：`AuditConfigIds` 指定建表/写入连接；`DatabaseAuditRecord` 继承 `DatabaseRecordEntity`（`creator_id` / `creation_time`）；组件用 `DatabaseAuditBuilder.Scalar/List/...`；`HasChanges` 空则不写库。`WithAudit.SetXxx` 为业务包装示例，见 `TestConsole`。
-19. **实体基类（DDD）**：`Entity` 身份 → `Record` 只追加 → `Business` 聚合；`[DatabaseAuditIgnore]` 生命周期不进 `changes`；`Sort` 用 `.ChangeSort(前,后,audit)`；软删 `delete_time` 空=未删。
+19. **实体基类（DDD）**：`Entity` 身份 → `Record` 只追加 → `Business` 聚合；`[DatabaseAuditIgnore]` 生命周期不进 `changes`；`Sort` 用 `.ChangeSort(前,后,audit)`；软删单表用 `.NotDeleted()`（`delete_time IS NULL`）；**多表 Join 后不可用**，须 Join 前调用或手写 `(a,b) => a.DeleteTime == null`。
 
 ## 引用
 
