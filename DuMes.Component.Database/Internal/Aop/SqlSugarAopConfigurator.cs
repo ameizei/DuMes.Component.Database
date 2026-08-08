@@ -50,7 +50,8 @@ internal static class SqlSugarAopConfigurator
     /// <summary>
     ///     全局 EntityService：<see cref="Ulid"/> → <c>UlidTypeConverter</c>；
     ///     枚举 → SqlSugar 自带 <c>EnumToStringConvert</c>（库中存枚举名字符串）；
-    ///     <c>[DatabaseVector]</c> → <c>VectorTypeConverter</c> + <c>vector(n)</c>。
+    ///     <c>[DatabaseVector]</c> → <c>VectorTypeConverter</c> + <c>vector(n)</c>；
+    ///     <c>[DatabaseCoordinate]</c> → <c>CoordinateTypeConverter</c> + <c>vector(2|3)</c>。
     /// </summary>
     private static void ApplyTypeMappings(ISqlSugarClient client)
     {
@@ -59,6 +60,20 @@ internal static class SqlSugarAopConfigurator
         external.EntityService = (property, column) =>
         {
             previous?.Invoke(property, column);
+
+            var coordAttr = property.GetCustomAttribute<DatabaseCoordinateAttribute>(inherit: true);
+            if (coordAttr != null)
+            {
+                var coordType = Nullable.GetUnderlyingType(property.PropertyType) ?? property.PropertyType;
+                if (coordType != typeof(DatabaseCoordinate))
+                    throw new InvalidOperationException(
+                        $"属性 {property.DeclaringType?.Name}.{property.Name} 标注了 {nameof(DatabaseCoordinateAttribute)}，类型须为 {nameof(DatabaseCoordinate)}。");
+
+                column.SqlParameterDbType = typeof(SqlSugar.DbConvert.CoordinateTypeConverter);
+                column.DataType = $"vector({coordAttr.Dimensions})";
+                column.IsArray = false;
+                return;
+            }
 
             var vectorAttr = property.GetCustomAttribute<DatabaseVectorAttribute>(inherit: true);
             if (vectorAttr != null)

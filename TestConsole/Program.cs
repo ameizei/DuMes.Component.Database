@@ -41,6 +41,7 @@ await NavigateScenario.RunAsync(systemDb, logger);
 await PartitionScenario.RunAsync(systemDb, logger);
 await InheritScenario.RunAsync(systemDb, logger);
 await VectorScenario.RunAsync(systemDb, logger);
+await CoordinateScenario.RunAsync(systemDb, logger);
 
 logger.LogInformation("TestConsole 全部场景完成。");
 await host.StopAsync();
