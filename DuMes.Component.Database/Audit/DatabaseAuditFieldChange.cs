@@ -8,9 +8,9 @@ namespace DuMes.Component.Database.Audit;
 /// <remarks>
 ///     JSON 示例（驼峰）：
 ///     <code>
-///     { "path": "PLC.Name", "label": "PLC名称", "kind": "Nested", "before": "S7", "after": "NJ" }
-///     { "path": "Avatar", "label": "头像", "kind": "Image", "before": "/a.png", "after": "/b.png" }
-///     { "path": "MenuIcon", "label": "菜单图标", "kind": "Icon", "before": "home", "after": "setting" }
+///     { "path": "PLC.Name", "label": "Plc.Name", "kind": "Nested", "before": "S7", "after": "NJ" }
+///     { "path": "Avatar", "label": "Avatar", "kind": "Image", "before": "/a.png", "after": "/b.png" }
+///     { "path": "MenuIcon", "label": "MenuIcon", "kind": "Icon", "before": "home", "after": "setting" }
 ///     { "path": "LoginMethods", "kind": "List", "before": ["Web","Mobile"], "after": ["Web"], "added": [], "removed": ["Mobile"] }
 ///     </code>
 /// </remarks>
@@ -22,7 +22,10 @@ public sealed class DatabaseAuditFieldChange
     /// </summary>
     public string Path { get; set; } = string.Empty;
 
-    /// <summary>前台展示用标签（可空；空则前台回退显示 <see cref="Path"/>）。</summary>
+    /// <summary>
+    ///     字段名称键（可空；供前台 I18N，勿存某语言文案）。
+    ///     空则前台回退用 <see cref="Path"/> 作键或原文。组件内置键见 <c>DatabaseAuditFieldNames</c>。
+    /// </summary>
     public string Label { get; set; }
 
     /// <summary>值形态（含 <c>Image</c>/<c>Icon</c> 供前台展示）。</summary>

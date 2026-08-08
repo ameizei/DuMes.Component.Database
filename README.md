@@ -10,7 +10,7 @@
 DuMes.Component.Database/
 ├── DependencyInjection/     # AddComponentDatabase
 ├── Options/                 # DatabaseComponentOptions、DatabaseConnectionOptions
-├── Entities/                # DatabaseEntity / Record / Business、NewId / Set / By / At / Touch / SoftDelete
+├── Entities/                # DDD：Entity / Record / Business、审计 Field/Ignore、NewId / Touch / ChangeSort
 ├── Audit/                   # 统一表 log_audit、DatabaseAuditBuilder / DatabaseAuditRef
 ├── CodeFirst/               # [CodeFirst]/Tenant/Group/Partition/Inherit/Jsonb/Vector/Coordinate、GetEntityTypes、InitTables
 ├── Serialization/           # System.Text.Json（IsJson / ISerializeService / DatabaseJsonOptions）
@@ -398,7 +398,7 @@ var builder = DatabaseAuditBuilder.For(nameof(Product), fromDb.Id, "Update")
 
 if (fromDb.Name != fromUi.Name)
 {
-    builder.Scalar("Name", fromDb.Name, fromUi.Name, label: "名称");
+    builder.Scalar("Name", fromDb.Name, fromUi.Name, label: "Name"); // label = I18N 键，非某语言文案
     fromDb.Name = fromUi.Name;
 }
 
@@ -418,7 +418,7 @@ var logs = await auditDb.Queryable<DatabaseAuditRecord>()
 
 > **`WithAudit(...).SetXxx(前,后)` 不是组件 API**：由业务实体自建包装类（见 `TestConsole` 的 `DemoProduct` / `DemoUser` / `DemoStation`），内部仍调用 `builder.Scalar` / `List`。组件**不提供**整对象万能 Diff。
 
-前台 JSON 形态示例（驼峰，与组件 `DatabaseJsonOptions` 一致；`creationTime` 格式为 `yyyy-MM-dd HH:mm:ss`）：
+前台 JSON 形态示例（驼峰，与组件 `DatabaseJsonOptions` 一致；`creationTime` 格式为 `yyyy-MM-dd HH:mm:ss`）。**`changes[].label` 为 I18N 名称键**（稳定英文/点号键），前台用 [I18N](https://github.com/ameizei/DuMes.Component.I18N) 解析展示文案，勿在库中存「工站名称」等某语言字面量：
 
 ```json
 {
@@ -429,11 +429,11 @@ var logs = await auditDb.Queryable<DatabaseAuditRecord>()
   "creatorId": "...",
   "creationTime": "2026-08-08 21:00:00",
   "changes": [
-    { "path": "Name", "label": "工站名称", "kind": "Scalar", "before": "ST-01", "after": "ST-02" },
-    { "path": "PLC.Name", "label": "PLC名称", "kind": "Nested", "before": "Siemens-S7", "after": "Omron-NJ" },
+    { "path": "Name", "label": "Name", "kind": "Scalar", "before": "ST-01", "after": "ST-02" },
+    { "path": "PLC.Name", "label": "Plc.Name", "kind": "Nested", "before": "Siemens-S7", "after": "Omron-NJ" },
     {
       "path": "RoleIds",
-      "label": "角色",
+      "label": "RoleIds",
       "kind": "List",
       "before": [
         { "id": "…", "name": "管理员" },
@@ -463,7 +463,7 @@ var logs = await auditDb.Queryable<DatabaseAuditRecord>()
 // 业务列写 Id；审计写带名称的 DatabaseAuditRef 快照（查字典/缓存即可）
 var beforeRoles = DatabaseAuditRef.FromIds(user.RoleIds, id => roleNameMap[id]);
 var afterRoles = DatabaseAuditRef.FromIds([roleA, roleB], id => roleNameMap[id]);
-builder.List("RoleIds", beforeRoles, afterRoles, label: "角色");
+builder.List("RoleIds", beforeRoles, afterRoles, label: "RoleIds");
 user.RoleIds = [roleA, roleB];
 
 if (user.ProfileId != newProfileId)
@@ -472,7 +472,7 @@ if (user.ProfileId != newProfileId)
         "ProfileId",
         user.ProfileId is null ? null : DatabaseAuditRef.Of(user.ProfileId.Value, profileNameMap[user.ProfileId.Value]),
         newProfileId is null ? null : DatabaseAuditRef.Of(newProfileId.Value, profileNameMap[newProfileId.Value]),
-        label: "资料卡");
+        label: "ProfileId");
     user.ProfileId = newProfileId;
 }
 
@@ -485,50 +485,41 @@ if (user.ProfileId != newProfileId)
 
 约定使用 `Ulid` 作为实体主键类型（Crockford Base32，26 字符；组件映射为 `varchar(26)`，列名 `id`）。
 
-| 基类 | 列 | 适用 |
-|------|-----|------|
-| [`DatabaseEntity`](DuMes.Component.Database/Entities/DatabaseEntity.cs) | `id` | 仅需主键的轻量实体 |
-| [`DatabaseRecordEntity`](DuMes.Component.Database/Entities/DatabaseRecordEntity.cs) | + `creator_id` / `creation_time`（`IsOnlyIgnoreUpdate`） | record / log / 审计等只追加表 |
-| [`DatabaseBusinessEntity`](DuMes.Component.Database/Entities/DatabaseBusinessEntity.cs) | + `modifier_id` / `modify_time` / `delete_time` / `sort` | 可改可软删的业务主数据表 |
+按 DDD 分层（身份 → 记录戳 → 业务聚合）：
 
-继承链：`DatabaseEntity` → `DatabaseRecordEntity` → `DatabaseBusinessEntity`。`DatabaseAuditRecord` 继承 `DatabaseRecordEntity`（审计行只追加）。
+| 基类 | 职责 | 列 |
+|------|------|-----|
+| [`DatabaseEntity`](DuMes.Component.Database/Entities/DatabaseEntity.cs) | 实体身份；按 `Id` 相等 | `id` |
+| [`DatabaseRecordEntity`](DuMes.Component.Database/Entities/DatabaseRecordEntity.cs) | 只追加记录（审计/日志） | + `creator_id` / `creation_time`（`IsOnlyIgnoreUpdate`） |
+| [`DatabaseBusinessEntity`](DuMes.Component.Database/Entities/DatabaseBusinessEntity.cs) | 可改可软删的业务聚合根 | + 生命周期 `modifier_id` / `modify_time` / `delete_time`；领域 `sort` |
 
-软删约定：`delete_time IS NULL` = 未删除；有时间 = 已删除（值为删除时刻）。未删查询：`.Where(x => x.DeleteTime == null)`（或内存侧 `!x.IsDeleted`，`IsDeleted` 为忽略列）。
+`DatabaseAuditRecord` 继承 `DatabaseRecordEntity`。
 
-推荐表实体继承基类，并用链式赋值：
+**字段级审计（`changes`）约定**
+
+| 列 | 特性 | 是否记差异 |
+|----|------|------------|
+| `id` / `creator_*` / `modifier_*` / `modify_time` / `delete_time` | `[DatabaseAuditIgnore]` | 否——谁/何时见审计行自身的 `creator_id` / `creation_time`；软删用 `action=Delete` |
+| `sort` | `[DatabaseAuditField(DatabaseAuditFieldNames.Sort)]` → `label: "Sort"` | 是——`.ChangeSort(前, 后, audit)` |
+| 业务自定义列 | `[DatabaseAuditField("Name")]` 等稳定键 | 是——`builder.Scalar(..., label: 键)`；前台按 `label` 做 I18N |
+
+软删：`delete_time IS NULL` = 未删除；有值 = 已删除。查询：`.Where(x => x.DeleteTime == null)`。
 
 ```csharp
+using DuMes.Component.Database.Audit;
 using DuMes.Component.Database.Entities;
 
-// 业务表
-var row = new Product()
-    .NewId()
-    .By(userId)
-    .At()
-    .WithSort(10)
-    .Set(x => x.Name, "widget");
+var row = new Product().NewId().By(userId).At().WithSort(10).Set(x => x.Name, "widget");
 await DbScoped.SugarScope.Insertable(row).ExecuteCommandAsync();
 
-row.Set(x => x.Name, "widget-v2").Touch(userId);
+var audit = DatabaseAuditBuilder.For(nameof(Product), row.Id, "Update").By(userId);
+row.ChangeSort(10, 20, audit);           // Sort → changes
+row.Set(x => x.Name, "widget-v2").Touch(userId); // Touch 不进 changes
 await DbScoped.SugarScope.Updateable(row).ExecuteCommandAsync();
+await auditDb.Insertable(audit.Build()).ExecuteCommandAsync();
 
-row.SoftDelete(userId); // 写 delete_time；Updateable 落库
+row.SoftDelete(userId); // 不进 changes；另建 For(..., "Delete") 审计行即可
 await DbScoped.SugarScope.Updateable(row).ExecuteCommandAsync();
-
-// record / log 表
-var log = new OpLog().NewId().By(userId).At();
-await DbScoped.SugarScope.Insertable(log).ExecuteCommandAsync();
-```
-
-仍可手写主键、不继承基类：
-
-```csharp
-var row = new Product
-{
-    Id = Ulid.NewUlid(),
-    Name = "widget",
-    CreationTime = DateTime.Now
-};
 ```
 
 说明：
@@ -538,7 +529,7 @@ var row = new Product
 3. **全局映射（Ulid）**：`EntityService` 为 `Ulid` / `Ulid?` 挂载 `UlidTypeConverter`（`varchar(26)`）；实体列不必写 `SqlParameterDbType`。
 4. **全局映射（枚举）**：`EntityService` 为枚举 / 可空枚举挂载 SqlSugar 自带 `EnumToStringConvert`，库中存枚举**名称**（如 `OnSale`），非数值；列上已显式指定 `SqlParameterDbType` 时不覆盖。
 5. **可空值类型**：业务上「可无」的外键可用 `Ulid?`；主键仍写 `Ulid`，插入前必须赋值。
-6. **基类范围**：`DatabaseEntity` 身份；`DatabaseRecordEntity` 创建人/时间；`DatabaseBusinessEntity` 修改人/时间、软删时间、排序。`[SugarTable]` / `[CodeFirst]` / `[Tenant]` 与业务列由派生类声明。
+6. **DDD 基类**：身份 / 记录戳 / 业务聚合；生命周期列 Ignore，领域列 Field；`[SugarTable]` 等由派生类声明。
 
 ## 使用
 
@@ -608,7 +599,7 @@ catch
 16. **PG 向量索引**：`[DatabaseVectorIndex]` 默认 HNSW + L2；查询运算符须与 `Ops` 一致（L2=`<->`，Cosine=`<=>`，IP=`<#>`）。IVFFlat 适合已有数据后再建，并设合理 `Lists`。
 17. **SqlSugar 能力**：分表、仓储等以 [官方文档](https://www.donet5.com/Home/Doc) 为准；本组件负责注册、校验、AOP、建库/架构与 CodeFirst / 分区 / 继承 / jsonb·向量索引 / 向量 / 坐标封装。
 18. **字段审计**：`AuditConfigIds` 指定建表/写入连接；`DatabaseAuditRecord` 继承 `DatabaseRecordEntity`（`creator_id` / `creation_time`）；组件用 `DatabaseAuditBuilder.Scalar/List/...`；`HasChanges` 空则不写库。`WithAudit.SetXxx` 为业务包装示例，见 `TestConsole`。
-19. **实体基类分层**：日志/审计继承 `DatabaseRecordEntity`（`.By` / `.At`）；业务主数据继承 `DatabaseBusinessEntity`（再加 `.Touch` / `.SoftDelete` / `.Restore` / `.WithSort`）；`delete_time` 空=未删、有值=已删。
+19. **实体基类（DDD）**：`Entity` 身份 → `Record` 只追加 → `Business` 聚合；`[DatabaseAuditIgnore]` 生命周期不进 `changes`；`Sort` 用 `.ChangeSort(前,后,audit)`；软删 `delete_time` 空=未删。
 
 ## 引用
 
@@ -620,7 +611,7 @@ catch
 using DuMes.Component.Database.Audit; // DatabaseAuditRecord / DatabaseAuditBuilder / DatabaseAuditRef
 using DuMes.Component.Database.CodeFirst; // InitTables / GetEntityTypes / 分区·向量等特性
 using DuMes.Component.Database.DependencyInjection;
-using DuMes.Component.Database.Entities; // DatabaseEntity / Record / Business / NewId / Set / By / At / Touch / SoftDelete
+using DuMes.Component.Database.Entities; // Entity / Record / Business / AuditField|Ignore / NewId / ChangeSort
 using DuMes.Component.Database.Options;
 using DuMes.Component.Database.Serialization; // DatabaseJsonOptions（可选复用）
 using DuMes.Component.Serilog; // Write*

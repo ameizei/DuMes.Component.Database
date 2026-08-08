@@ -12,9 +12,9 @@ namespace DuMes.Component.Database.Audit;
 /// <code>
 /// var audit = DatabaseAuditBuilder.For&lt;DatabaseAuditRecord&gt;("Station", stationId, "Update")
 ///     .By(userId)
-///     .Scalar("Name", "ST-01", "ST-02", label: "工站名称")
-///     .Nested("PLC.Name", "S7", "NJ", label: "PLC名称")
-///     .List("LoginMethods", new[] { "Web", "Mobile" }, new[] { "Web", "Api" }, label: "登录方式")
+///     .Scalar("Name", "ST-01", "ST-02", label: "Name")
+///     .Nested("PLC.Name", "S7", "NJ", label: "Plc.Name")
+///     .List("LoginMethods", new[] { "Web", "Mobile" }, new[] { "Web", "Api" }, label: "LoginMethods")
 ///     .Build();
 /// </code>
 /// </example>
