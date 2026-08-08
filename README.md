@@ -10,8 +10,10 @@
 DuMes.Component.Database/
 ├── DependencyInjection/     # AddComponentDatabase
 ├── Options/                 # DatabaseComponentOptions、DatabaseConnectionOptions
+├── Serialization/           # System.Text.Json（IsJson / ISerializeService）
+├── Converters/              # UlidTypeConverter（表列 EntityService）
 └── Internal/
-    └── Aop/                 # LogDebug（调试窗口）/ WriteWarning·WriteError（落盘）
+    └── Aop/                 # 映射 / 序列化挂载 / SQL AOP
 ```
 
 ## 分工
@@ -107,7 +109,9 @@ builder.Services.AddComponentDatabase(o =>
 | SQL 错误 | `OnError` → `WriteError("sql_error", …)`（可带异常）→ `logs/sql_error.log`（含赋值后 SQL / 参数摘要，**不含连接串**；各环境均落盘） |
 | 与 MEL 区别 | `LogDebug` **不落盘**；只有 `WriteWarning` / `WriteError` 写文件（见 Serilog README） |
 | Pg 命名 | `DbType=PostgreSQL` 时默认开启 `PgSqlIsAutoToLower`；实体列须显式 `ColumnName`（见「命名约定」） |
-
+| Ulid 映射 | `EntityService` 全局挂载 `UlidTypeConverter` → `varchar(26)`（仅**表列**） |
+| 枚举映射 | `EntityService` 全局挂载 SqlSugar `EnumToStringConvert` → 库中存**枚举名**（仅**表列**） |
+| IsJson | 表列 `IsJson=true` + `ColumnDataType=jsonb`；经 `DatabaseSerializeService`（System.Text.Json）序列化：驼峰、枚举名、Ulid 字符串 |
 | 环境 | 全量 SQL（`LogDebug`） | 慢 SQL / 错误（`Write*`） |
 |------|------------------------|---------------------------|
 | Development | ✓ 调试窗口 | ✓ `logs/sql_slow.log` / `logs/sql_error.log` |
@@ -243,8 +247,9 @@ await DbScoped.SugarScope.Insertable(row).ExecuteCommandAsync();
 
 1. **生成**：`Ulid.NewUlid()`（可排序；与审计字段用 `DateTime.Now` 无关）。
 2. **勿用雪花**：本组件不配置 `SnowFlakeSingle` / `DatacenterId` / `WorkId`。
-3. **可空值类型**：业务上「可无」的外键可用 `Ulid?`（与后端 skill 中值类型可空约定一致）；主键仍写 `Ulid`，插入前必须赋值。
-4. SqlSugar 较新版本对 `Ulid` 有原生支持；若映射异常，再按官方文档配置 `ISugarDataConverter`。
+3. **全局映射（Ulid）**：`EntityService` 为 `Ulid` / `Ulid?` 挂载 `UlidTypeConverter`（`varchar(26)`）；实体列不必写 `SqlParameterDbType`。
+4. **全局映射（枚举）**：`EntityService` 为枚举 / 可空枚举挂载 SqlSugar 自带 `EnumToStringConvert`，库中存枚举**名称**（如 `OnSale`），非数值；列上已显式指定 `SqlParameterDbType` 时不覆盖。
+5. **可空值类型**：业务上「可无」的外键可用 `Ulid?`；主键仍写 `Ulid`，插入前必须赋值。
 
 ## 使用
 
@@ -321,18 +326,16 @@ using SqlSugar.IOC; // DbScoped
 
 ## 测试工程
 
-（实现示例工程后补充。建议对齐兄弟组件：）
-
 | 工程 | 说明 |
 |------|------|
-| `TestConsole` | 控制台：注册后查库 / ULID 插入 / 慢 SQL 日志 |
-| `TestWebApi` | WebAPI：演示 CRUD 与多库 |
-| `TestWorkerService` | Worker：后台任务写库 |
+| `TestConsole` | 控制台：多架构 ConfigId（`system` / `demo`）导航、增删改查、分页、多库事务、ULID |
+| `TestWebApi` | （待补）WebAPI：演示 CRUD 与多库 |
+| `TestWorkerService` | （待补）Worker：后台任务写库 |
+
+`TestConsole` 在 `appsettings.Development.json` 配置连接；`ConfigId` 可按架构名（如 `system`、`demo`）区分同一库下不同 `searchpath`。
 
 ```bash
-# 示例（工程就绪后）
 dotnet run --project TestConsole
-dotnet run --project TestWebApi
 ```
 
 ## 相关组件

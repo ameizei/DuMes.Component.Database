@@ -1,3 +1,4 @@
 <Solution>
   <Project Path="DuMes.Component.Database/DuMes.Component.Database.csproj" />
+  <Project Path="TestConsole/TestConsole.csproj" />
 </Solution>
