@@ -1,64 +1,37 @@
-using DuMes.Component.Database.Audit;
-using DuMes.Component.Database.CodeFirst;
-using DuMes.Component.Database.Internal.Config;
-using DuMes.Component.Database.Internal.Postgres;
-using DuMes.Component.Database.Options;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using SqlSugar;
-using SqlSugar.IOC;
 
 namespace DuMes.Component.Database.Internal.Aop;
 
 /// <summary>
-///     宿主启动时：注入 SQL AOP 所用 <see cref="ILogger" />，自动建库 / 架构 / pgvector，
-///     并在 <see cref="DatabaseComponentOptions.AuditConfigIds"/> 指定的连接上建统一审计表。
-///     业务实体 CodeFirst 仍由业务侧 <c>DatabaseCodeFirst.InitTables(assembly)</c>。
+///     宿主 <c>StartAsync</c> 时的兜底 Warmup（与
+///     <c>EnsureComponentDatabaseAsync</c> 共用逻辑、幂等）。
+///     Web Host 若需在模块 <c>InitializeAsync</c> 前就绪，应显式调用
+///     <c>EnsureComponentDatabaseAsync</c>，不要只依赖本服务（其晚于 <c>Run</c> 之前的业务代码）。
 /// </summary>
 internal sealed class DatabaseComponentWarmupHostedService : IHostedService
 {
-    private readonly DatabaseComponentOptions _options;
-    private readonly ILogger _logger;
+    private readonly IServiceProvider _services;
 
     public DatabaseComponentWarmupHostedService(
-        DatabaseComponentOptions options,
+        IServiceProvider services,
         ISqlSugarClient sugarClient,
         ILoggerFactory loggerFactory)
     {
-        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(sugarClient);
         ArgumentNullException.ThrowIfNull(loggerFactory);
 
-        _options = options;
+        _services = services;
         DatabaseSqlLogger.Initialize(loggerFactory);
-        _logger = loggerFactory.CreateLogger("DuMes.Component.Database.Bootstrap");
     }
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
-        DatabaseBootstrapper.EnsureCreated(_options, _logger);
-        PostgresVectorBootstrapper.Ensure(_options, _logger);
-        EnsureAuditTable();
+        DatabaseComponentWarmup.EnsureReady(_services);
         return Task.CompletedTask;
     }
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
-
-    private void EnsureAuditTable()
-    {
-        var auditConfigIds = _options.ResolveAuditConfigIds();
-        if (auditConfigIds.Count == 0)
-        {
-            _logger.LogWarning("未解析到审计表 ConfigId，跳过 log_audit 建表");
-            return;
-        }
-
-        foreach (var configId in auditConfigIds)
-        {
-            var resolved = DatabaseConfigIdResolver.Resolve(configId);
-            var db = DbScoped.SugarScope.GetConnection(resolved);
-            DatabaseCodeFirst.InitTables(db, typeof(DatabaseAuditRecord));
-            _logger.LogInformation("统一审计表 log_audit 已就绪 ConfigId={ConfigId}", resolved);
-        }
-    }
 }

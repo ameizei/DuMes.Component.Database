@@ -8,7 +8,7 @@
 
 ```text
 DuMes.Component.Database/
-├── DependencyInjection/     # AddComponentDatabase
+├── DependencyInjection/     # AddComponentDatabase、EnsureComponentDatabaseAsync
 ├── Options/                 # DatabaseComponentOptions、DatabaseConnectionOptions
 ├── Entities/                # DDD：Entity / Record / Business、审计 Field/Ignore、NewId / Touch / ChangeSort
 ├── Audit/                   # 统一表 log_audit、DatabaseAuditBuilder / DatabaseAuditRef
@@ -53,6 +53,12 @@ using DuMes.Component.Serilog.DependencyInjection;
 var builder = WebApplication.CreateBuilder(args);
 builder.Host.UseComponentSerilog(); // 必接：Development 下 LogDebug→调试窗口；Write* 落盘
 builder.Services.AddComponentDatabase(builder.Configuration);
+
+var app = builder.Build();
+// 须在业务 InitTables / 模块 InitializeAsync 之前：建库 → Schema → pgvector → log_audit
+await app.EnsureComponentDatabaseAsync();
+// await app.InitializeModulesAsync(); // 再业务建表 / 种子
+app.Run();
 ```
 
 配置节名固定为 **`Database`**（缺失则启动失败）。
@@ -79,7 +85,7 @@ builder.Services.AddComponentDatabase(o =>
 |------|------|
 | SqlSugar.IOC 多库注册 | 每条 `Connections` → 一个 `IocConfig`（`DbType` 可配，默认 PostgreSQL） |
 | `DbScoped.SugarScope` / `ISqlSugarClient` | 业务侧查询、事务入口 |
-| 启动建库 / 架构 | `IHostedService`：`CreateDatabase` + PG `searchpath` schema（固定开启） |
+| 启动建库 / 架构 / 审计表 | **推荐** `await app.EnsureComponentDatabaseAsync()`（`Build` 后、业务建表前）：`CreateDatabase` + Schema + pgvector + `log_audit`。另有幂等 `IHostedService` 兜底（仅 `Run`/`StartAsync` 时执行，晚于 `Run` 前的业务代码） |
 | CodeFirst | 实体须标 `[CodeFirst]`（表明非 DbFirst）+ `[Tenant]`/`[DatabaseGroup]` + `[SugarTable]`；业务侧调用 `InitTables` / `GetEntityTypes`（Warmup **不**扫业务程序集） |
 | 自动关连接 | 注册时固定 `IsAutoCloseConnection=true`；特殊场景可在业务侧自建 `SqlSugarClient` |
 | AOP | 经 `ILogger` + Serilog：`LogDebug` / `WriteWarning` / `WriteError`（见「组件内置行为」） |
@@ -112,8 +118,8 @@ builder.Services.AddComponentDatabase(o =>
 | 行为 | 说明 |
 |------|------|
 | 配置校验 | 启动时 `Validate()`：节存在、连接非空、`ConfigId` 唯一（含从库）、`DbType` 合法；`AuditConfigIds` 须为主库 ConfigId |
-| 自动建库 / 架构 | 固定开启：仅对**主库** `CreateDatabase()`；建架构按 `DbType` 选 SQL——PG 系（含人大金仓/OpenGauss 等）`CREATE SCHEMA IF NOT EXISTS`（读 `searchpath`）；SQL Server 查 `sys.schemas` 后建（架构名取 `ConfigId`）；MySQL / Sqlite / Oracle 等**不支持独立架构**则跳过。达梦 `Dm` 仅尝试 PG 方言建 SCHEMA，**不**纳入分区/向量/小写 MoreSettings。见 [库表管理](https://www.donet5.com/Home/Doc?typeId=1203) |
-| 统一审计表 | Warmup 仅在 `AuditConfigIds`（默认第一连接）上建 `log_audit`（直接 `InitTables(db, typeof(DatabaseAuditRecord))`，审计实体无 Tenant，**不会**被业务 `InitTables(assembly)` 扫到）；写入请 `GetConnection(auditConfigId)` |
+| 自动建库 / 架构 | 固定开启：由 `EnsureComponentDatabaseAsync`（推荐）或 `IHostedService` Warmup 触发；仅对**主库** `CreateDatabase()`；建架构按 `DbType` 选 SQL——PG 系（含人大金仓/OpenGauss 等）`CREATE SCHEMA IF NOT EXISTS`（读 `searchpath`）；SQL Server 查 `sys.schemas` 后建（架构名取 `ConfigId`）；MySQL / Sqlite / Oracle 等**不支持独立架构**则跳过。达梦 `Dm` 仅尝试 PG 方言建 SCHEMA，**不**纳入分区/向量/小写 MoreSettings。见 [库表管理](https://www.donet5.com/Home/Doc?typeId=1203) |
+| 统一审计表 | 同上就绪流程：仅在 `AuditConfigIds`（默认第一连接）上建 `log_audit`（直接 `InitTables(db, typeof(DatabaseAuditRecord))`，审计实体无 Tenant，**不会**被业务 `InitTables(assembly)` 扫到）；写入请 `GetConnection(auditConfigId)` |
 | CodeFirst | 扫描建表须同时具备：`[CodeFirst]`（非 DbFirst）+ `[SugarTable]` + `[Tenant("configId")]`（优先；兼容 `[DatabaseGroup]`）。无 `[CodeFirst]` 的表实体不参与 InitTables。另有 `GetEntityTypes` / `GetEntityTypesByGroup` / `InitTables(groupName, assembly)`。`QueryableWithAttr` 仍只依赖 Tenant。见 [CodeFirst](https://www.donet5.com/Home/Doc?typeId=1206)、[多租户](https://www.donet5.com/Doc/1/2246) |
 | PG 分区表 | `[DatabasePartition(Grain)]` + `[DatabasePartitionField]`；`Grain`：`Year` / `Quarter` / `Month` / `Day`；默认 `AheadCount=3`、`PastCount=1`（以 `DateTime.Now` 为锚，只建该窗口内子分区，**不**自动补历史窗外）。InitTables 建父表/`PARTITION BY RANGE`/子分区。DDL 走连接当前 `search_path`。**已存在时对比实体增删列**（有数据亦可：对父表 `ADD`/`DROP COLUMN` 级联子分区；分区键不可删；新增非空列尽量带 DEFAULT，部分类型可能无法生成）。`[SugarIndex]` 建在**父表**。非 SqlSugar SplitTable |
 | PG 继承表 | 子实体 C# 继承父实体并标 `[DatabaseInherit]`；InitTables 建父表后 `CREATE TABLE child (本地列…) INHERITS (parent)`（子表**不**单独写 PRIMARY KEY，身份列在父表）。子类只声明本地列；父列变更由父实体同步。`[SugarIndex]` / `[DatabaseJsonbIndex]` / `[DatabaseVectorIndex]` **不随 INHERITS 传播**（索引特性 `Inherited=false`，子类须各自声明）。与分区表互斥。见 [表继承](https://www.postgresql.org/docs/current/ddl-inherit.html) |
@@ -377,7 +383,7 @@ public Ulid Id { get; set; }
 
 ## 字段审计（统一表 `log_audit`）
 
-组件内置统一审计表实体 [`DatabaseAuditRecord`](DuMes.Component.Database/Audit/DatabaseAuditRecord.cs)（继承 [`DatabaseRecordEntity`](DuMes.Component.Database/Entities/DatabaseRecordEntity.cs)）与构造器 [`DatabaseAuditBuilder`](DuMes.Component.Database/Audit/DatabaseAuditBuilder.cs)。Warmup 按 **`AuditConfigIds`** 建表（默认第一连接；SaaS 请显式指向 `record` 等）。写入须用对应连接，例如 `GetConnection("record")`。
+组件内置统一审计表实体 [`DatabaseAuditRecord`](DuMes.Component.Database/Audit/DatabaseAuditRecord.cs)（继承 [`DatabaseRecordEntity`](DuMes.Component.Database/Entities/DatabaseRecordEntity.cs)）与构造器 [`DatabaseAuditBuilder`](DuMes.Component.Database/Audit/DatabaseAuditBuilder.cs)。`EnsureComponentDatabaseAsync` / Warmup 按 **`AuditConfigIds`** 建表（默认第一连接；SaaS 请显式指向 `record` 等）。写入须用对应连接，例如 `GetConnection("record")`。
 
 | 列 | 说明 |
 |------|------|
@@ -607,7 +613,7 @@ catch
 6. **时间**：审计字段写入 `DateTime.Now`（本地时；暂无异地部署）。JSON 时间为 `yyyy-MM-dd HH:mm:ss`。
 7. **命名（PostgreSQL）**：库内表/列必须小写；组合词必须 `snake_case`（`xxx_xxx`）。写 `[SugarColumn]` 时 **`ColumnName` 必填**。
 8. **SQL 日志**：无 `EnableSqlDebugLog`；Development → `LogDebug` 进调试窗口；各环境慢 SQL / 错误用 `Write*` 落盘；Production 无全量 SQL。
-9. **自动建库 / 架构**：固定开启（仅主库）；建架构随 `DbType` 分支（不支持则跳过）。账户须有建库 / 建 schema 权限。
+9. **自动建库 / 架构**：固定开启（仅主库）；**Web / 需先建表的宿主**请在 `Build` 后、业务 `InitTables` 前调用 `await app.EnsureComponentDatabaseAsync()`（建库 → Schema → pgvector → `log_audit`，幂等）。仅依赖 `IHostedService` 会在 `Run`/`StartAsync` 时才执行，可能晚于模块初始化。建架构随 `DbType` 分支（不支持则跳过）。账户须有建库 / 建 schema 权限。
 10. **CodeFirst / Tenant**：扫描建表须 `[CodeFirst]` + `[SugarTable]` + `[Tenant]`（或 `[DatabaseGroup]`）；DbFirst 表不要标 `[CodeFirst]`。可用 `GetEntityTypes` / `InitTables(groupName, …)`。业务用 `QueryableWithAttr<T>()` 等切库。
 11. **PG 分区表**：`[DatabasePartition(Grain)]` + `[DatabasePartitionField]`（`Year`/`Quarter`/`Month`/`Day`）；主键含分区列。窗口外子分区不会自动补建，长期服务请定期 `InitTables` 或自行扩窗。有数据时仍可对**父表**增删列（[官方分区说明](https://www.postgresql.org/docs/current/ddl-partitioning.html) / [ALTER TABLE](https://www.postgresql.org/docs/current/sql-altertable.html)），子分区自动对齐；勿在子分区上单独改列。分区键禁止删除。`[SugarIndex]` 建在父表；**UNIQUE 索引须包含分区键**（PG 约束）。
 12. **PG 继承表**：子实体须 C# 继承父实体并标 `[DatabaseInherit]`（勿与分区表混用）。子类只写本地列；子表 DDL 不单独建 PK。查父表默认含子集（`ONLY parent` 可排除）。`[SugarIndex]` / jsonb·向量索引特性不继承，父/子各自声明。见 [表继承](https://www.postgresql.org/docs/current/ddl-inherit.html)。

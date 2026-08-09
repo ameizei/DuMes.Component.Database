@@ -22,7 +22,7 @@ builder.UseComponentSerilog();
 builder.Services.AddComponentDatabase(builder.Configuration);
 
 using var host = builder.Build();
-await host.StartAsync(); // Warmup：建库 / 架构
+await host.EnsureComponentDatabaseAsync(); // 建库 / Schema / pgvector / log_audit（须在业务 InitTables 之前）
 
 var logger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("TestConsole");
 
@@ -45,6 +45,5 @@ await CoordinateScenario.RunAsync(systemDb, logger);
 await AuditScenario.RunAsync(systemDb, logger);
 
 logger.LogInformation("TestConsole 全部场景完成。");
-await host.StopAsync();
 Log.CloseAndFlush();
 return 0;
