@@ -3,11 +3,11 @@
     <PropertyGroup>
         <TargetFramework>net10.0</TargetFramework>
         <ImplicitUsings>enable</ImplicitUsings>
-        <AssemblyVersion>6.0.1</AssemblyVersion>
+        <AssemblyVersion>6.0.2</AssemblyVersion>
         <RootNamespace>DuMes.Component.Database</RootNamespace>
         <Description>多脉数据库组件：基于 SqlSugar.IOC 提供统一 DI 注册、多库导航、读写分离与 SQL AOP（依赖 DuMes.Component.Serilog）</Description>
         <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
-        <Version>6.0.1</Version>
+        <Version>6.0.2</Version>
         <Title>多脉Database组件</Title>
         <Authors>田镓荣</Authors>
         <PackageProjectUrl>https://github.com/ameizei/DuMes.Component.Database</PackageProjectUrl>
@@ -19,21 +19,21 @@
     </PropertyGroup>
 
     <ItemGroup>
-        <None Include="..\README.md" Pack="true" PackagePath="\" />
-        <None Include="..\LICENSE" Pack="true" PackagePath="\" />
+        <None Include="..\README.md" Pack="true" PackagePath="\"/>
+        <None Include="..\LICENSE" Pack="true" PackagePath="\"/>
     </ItemGroup>
 
     <ItemGroup>
         <PackageReference Include="DuMes.Component.Serilog" Version="6.0.0" />
-        <PackageReference Include="Microsoft.Extensions.Configuration.Binder" Version="10.0.10" />
-        <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.10" />
-        <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.10" />
-        <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.10" />
-        <PackageReference Include="Npgsql" Version="10.0.3" />
-        <PackageReference Include="Pgvector" Version="0.3.2" />
-        <PackageReference Include="SqlSugar.IOC" Version="2.0.1" />
-        <PackageReference Include="SqlSugarCoreNoDrive" Version="5.1.4.216" />
-        <PackageReference Include="Ulid" Version="1.4.1" />
+        <PackageReference Include="Microsoft.Extensions.Configuration.Binder" Version="10.0.10"/>
+        <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.10"/>
+        <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.10"/>
+        <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.10"/>
+        <PackageReference Include="Npgsql" Version="10.0.3"/>
+        <PackageReference Include="Pgvector" Version="0.3.2"/>
+        <PackageReference Include="SqlSugar.IOC" Version="2.0.1"/>
+        <PackageReference Include="SqlSugarCoreNoDrive" Version="5.1.4.216"/>
+        <PackageReference Include="Ulid" Version="1.4.1"/>
     </ItemGroup>
 
 </Project>

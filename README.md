@@ -51,7 +51,7 @@ using DuMes.Component.Database.DependencyInjection;
 using DuMes.Component.Serilog.DependencyInjection;
 
 var builder = WebApplication.CreateBuilder(args);
-builder.Host.UseComponentSerilog(); // 必接：Development 下 LogDebug→调试窗口；Write* 落盘
+builder.Host.UseComponentSerilog(builder.Configuration, builder.Environment); // 必接；注册后即可 Log.*
 builder.Services.AddComponentDatabase(builder.Configuration);
 
 var app = builder.Build();
@@ -607,7 +607,7 @@ catch
 
 1. **`DbType` 可配，默认 PostgreSQL**：省略时按 `IocDbType.PostgreSQL`；改其它类型须补齐驱动包。
 2. **主键 ULID**：插入前 `.NewId()` 或 `Ulid.NewUlid()`；不要混用雪花 `long` 主键策略。推荐继承 `DatabaseEntity`。
-3. **先 Serilog 再 Database（强制）**：本组件已依赖 `DuMes.Component.Serilog`；宿主须 `UseComponentSerilog()`，否则 `LogDebug` / `Write*` 无法按约定输出。
+3. **先 Serilog 再 Database（强制）**：本组件已依赖 `DuMes.Component.Serilog`；宿主须 `UseComponentSerilog(configuration, environment)`，否则 `LogDebug` / `Write*` 无法按约定输出。
 4. **ConfigId 唯一**：同一 `Connections`（含从库）内忽略大小写重复则启动失败。从库只做读写分离，勿把从库 ConfigId 用于 `[Tenant]` / `AuditConfigIds`。
 5. **密钥**：连接串勿提交真实密码；用 Development / Production 分文件 + Secrets。
 6. **时间**：审计字段写入 `DateTime.Now`（本地时；暂无异地部署）。JSON 时间为 `yyyy-MM-dd HH:mm:ss`。
@@ -629,7 +629,7 @@ catch
 
 项目引用或 NuGet 引用本组件即可。传递引入 `DuMes.Component.Serilog`、`SqlSugar.IOC`、`SqlSugarCoreNoDrive`、`Npgsql`、`Pgvector`、`Ulid`。
 
-宿主须配置 `builder.Host.UseComponentSerilog()`（见 [Serilog README](https://github.com/ameizei/DuMes.Component.Serilog)）。
+宿主须配置 `builder.Host.UseComponentSerilog(builder.Configuration, builder.Environment)`（见 [Serilog README](https://github.com/ameizei/DuMes.Component.Serilog)）。
 
 ```csharp
 using DuMes.Component.Database.Audit; // DatabaseAuditRecord / DatabaseAuditBuilder / DatabaseAuditRef
